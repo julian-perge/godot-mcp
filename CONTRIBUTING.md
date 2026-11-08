@@ -100,9 +100,14 @@ The following tools have been recently added:
   - Helps LLMs understand the organization of Godot projects
   
 - **capture_screenshot**: Takes a screenshot of a running Godot project
-  - Requires an active Godot process
-  - Saves the screenshot to the specified path
+  - Requires a game started by run_project or run_scene
+  - Returns the image to the agent, and also saves it when given savePath
   - Useful for visual debugging and feedback
+
+- **simulate_input**: Sends input events to a running Godot project
+  - Mouse clicks, drags and movement, keys with modifiers, input actions and typed text
+  - Can take screenshots between steps
+  - Talks to the same harness as capture_screenshot, so nothing is installed into the project
 
 Example:
 

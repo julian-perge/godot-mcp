@@ -33,6 +33,7 @@ const PROCESS_EXIT_WAIT_MS = 1000;
 const OUTPUT_BUFFER_LIMIT = 1000; // Max lines to keep per stream
 const DEFAULT_GUT_TIMEOUT_MS = 600000;
 const GUT_OUTPUT_LIMIT_CHARS = 200000; // Tail of GUT stdout returned to the client
+const DEFAULT_INPUT_TIMEOUT_MS = 30000;
 
 const execFileAsync = promisify(execFile);
 
@@ -154,6 +155,7 @@ class GodotServer {
     'scene': 'scene',
     'line_count': 'lineCount',
     'save_path': 'savePath',
+    'warp_mouse': 'warpMouse',
     // GUT-related params
     'unit_test_name': 'unitTestName',
     'inner_class': 'innerClass',
@@ -785,7 +787,7 @@ class GodotServer {
               },
               harness: {
                 type: 'boolean',
-                description: 'Optional: Run the game under the godot-mcp harness main loop so capture_screenshot works (default: true). Nothing is written to the project. Set false for a project with its own main loop type.',
+                description: 'Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.',
               },
             },
             required: ['projectPath'],
@@ -818,7 +820,7 @@ class GodotServer {
               },
               harness: {
                 type: 'boolean',
-                description: 'Optional: Run the game under the godot-mcp harness main loop so capture_screenshot works (default: true). Nothing is written to the project. Set false for a project with its own main loop type.',
+                description: 'Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.',
               },
             },
             required: ['projectPath', 'scenePath'],
@@ -836,6 +838,69 @@ class GodotServer {
               },
             },
             required: [],
+          },
+        },
+        {
+          name: 'simulate_input',
+          description: 'Send mouse, keyboard and input action events to the game started by run_project or run_scene, one command after another, and return the screenshots taken along the way. Positions are in the game\'s viewport coordinates, the same pixels capture_screenshot returns. The sequence stops at the first command that fails.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              commands: {
+                type: 'array',
+                description: 'Commands to run in order: click {x, y, button?, double?}, mouse_move {x, y}, mouse_drag {from_x, from_y, to_x, to_y, button?}, key {key, modifiers?}, action {action, pressed?}, action_pulse {action, duration_ms?}, text {text, delay_ms?}, wait {duration_ms?}, screenshot {}',
+                items: {
+                  type: 'object',
+                  properties: {
+                    type: {
+                      type: 'string',
+                      enum: ['click', 'mouse_move', 'mouse_drag', 'key', 'action', 'action_pulse', 'text', 'wait', 'screenshot'],
+                    },
+                    x: { type: 'number' },
+                    y: { type: 'number' },
+                    from_x: { type: 'number' },
+                    from_y: { type: 'number' },
+                    to_x: { type: 'number' },
+                    to_y: { type: 'number' },
+                    button: {
+                      type: 'string',
+                      enum: ['left', 'right', 'middle'],
+                      description: 'Mouse button (default: left)',
+                    },
+                    double: { type: 'boolean', description: 'Send a double click (default: false)' },
+                    key: {
+                      type: 'string',
+                      description: 'Godot key name such as "A", "Space", "Enter", "Escape", "Up" or "F5". A name such as "Ctrl+S" also works.',
+                    },
+                    modifiers: {
+                      type: 'array',
+                      items: { type: 'string', enum: ['shift', 'ctrl', 'alt', 'meta'] },
+                    },
+                    action: {
+                      type: 'string',
+                      description: 'Input action from the project\'s Input Map, or a built-in one such as "ui_accept"',
+                    },
+                    pressed: { type: 'boolean', description: 'Press or release the action (default: true)' },
+                    duration_ms: {
+                      type: 'number',
+                      description: 'How long action_pulse holds the action, or how long wait waits (default: 100)',
+                    },
+                    text: { type: 'string', description: 'Characters to type' },
+                    delay_ms: { type: 'number', description: 'Pause between typed characters (default: 50)' },
+                  },
+                  required: ['type'],
+                },
+              },
+              warpMouse: {
+                type: 'boolean',
+                description: 'Optional: Also move the real mouse cursor to each position (default: false). Only needed when the game reads the cursor with get_global_mouse_position() or get_mouse_position(). It moves the cursor on the desktop.',
+              },
+              timeoutMs: {
+                type: 'number',
+                description: 'Optional: How long to wait for the whole sequence in milliseconds (default: 30000)',
+              },
+            },
+            required: ['commands'],
           },
         },
         {
@@ -1161,6 +1226,8 @@ class GodotServer {
           return await this.handleRunGutTests(request.params.arguments);
         case 'capture_screenshot':
           return await this.handleCaptureScreenshot(request.params.arguments);
+        case 'simulate_input':
+          return await this.handleSimulateInput(request.params.arguments);
         case 'get_godot_version':
           return await this.handleGetGodotVersion();
         case 'list_projects':
@@ -1831,14 +1898,22 @@ class GodotServer {
    * Send commands to mcp_harness.gd in the running game and return its answer.
    * Calls are queued so that two tool calls never interleave their commands.
    */
-  private requestHarness(commands: object[], timeoutMs: number): Promise<HarnessResponse> {
-    const run = () => this.sendHarnessRequest(commands, timeoutMs);
+  private requestHarness(
+    commands: object[],
+    timeoutMs: number,
+    options: Record<string, unknown> = {}
+  ): Promise<HarnessResponse> {
+    const run = () => this.sendHarnessRequest(commands, timeoutMs, options);
     const result = this.harnessQueue.then(run, run);
     this.harnessQueue = result.catch(() => undefined);
     return result;
   }
 
-  private async sendHarnessRequest(commands: object[], timeoutMs: number): Promise<HarnessResponse> {
+  private async sendHarnessRequest(
+    commands: object[],
+    timeoutMs: number,
+    options: Record<string, unknown>
+  ): Promise<HarnessResponse> {
     const godotProcess = this.currentProcess;
     if (!godotProcess?.isRunning) {
       throw new Error('No game is running. Start one with run_project or run_scene first.');
@@ -1846,7 +1921,7 @@ class GodotServer {
     if (!godotProcess.harness) {
       throw new Error('The running game was started with harness: false. Start it again without that option.');
     }
-    const payload = JSON.stringify({ token: godotProcess.harness.token, commands }) + '\n';
+    const payload = JSON.stringify({ ...options, token: godotProcess.harness.token, commands }) + '\n';
     const deadline = Date.now() + timeoutMs;
     // The harness starts listening only once the engine has booted, so a
     // refused connection right after run_project means "not yet".
@@ -1951,6 +2026,74 @@ class GodotServer {
         'Check get_debug_output for "[godot-mcp harness] listening on" to confirm the harness started',
       ]);
     }
+  }
+
+  /**
+   * Handle the simulate_input tool
+   */
+  private async handleSimulateInput(args: any) {
+    args = this.normalizeParameters(args || {});
+
+    const commands = args.commands;
+    if (
+      !Array.isArray(commands)
+      || commands.length === 0
+      || !commands.every(
+        (command) => command !== null && typeof command === 'object' && !Array.isArray(command) && typeof command.type === 'string'
+      )
+    ) {
+      return this.createErrorResponse('commands must be a non-empty list of objects that each have a type', [
+        'For example [{"type": "click", "x": 480, "y": 260}]',
+      ]);
+    }
+    if (args.warpMouse !== undefined && typeof args.warpMouse !== 'boolean') {
+      return this.createErrorResponse('warpMouse must be true or false', ['Omit it to leave the real cursor alone']);
+    }
+    const timeoutMs = args.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_SCENE_TIMEOUT_MS) {
+      return this.createErrorResponse(`timeoutMs must be an integer between 1 and ${MAX_SCENE_TIMEOUT_MS}`, [
+        `Omit it to use ${DEFAULT_INPUT_TIMEOUT_MS}`,
+      ]);
+    }
+
+    let response: HarnessResponse;
+    try {
+      response = await this.requestHarness(commands, timeoutMs, { warp_mouse: args.warpMouse === true });
+    } catch (error: any) {
+      return this.createErrorResponse(`Failed to send input: ${error?.message || 'Unknown error'}`, [
+        'Start the game with run_project or run_scene first',
+        'Raise timeoutMs when the commands wait longer than that in total',
+      ]);
+    }
+
+    const results = response.results ?? [];
+    const content: Array<{ type: 'image'; data: string; mimeType: string } | { type: 'text'; text: string }> = [];
+    for (const result of results) {
+      if (typeof result.png_base64 === 'string') {
+        content.push({ type: 'image', data: result.png_base64, mimeType: 'image/png' });
+      }
+    }
+    const screenshots = content.length;
+
+    if (!response.ok) {
+      const failedIndex = results.findIndex((result) => typeof result.error === 'string');
+      let text: string;
+      if (failedIndex === -1) {
+        text = `The harness refused the request: ${response.error ?? 'no reason given'}.`;
+      } else {
+        const failed = results[failedIndex];
+        text = `Command ${failedIndex + 1} of ${commands.length} (${failed.type || 'unknown'}) failed: ${failed.error}.`;
+        if (failedIndex + 1 < commands.length) {
+          text += ` Commands ${failedIndex + 2} to ${commands.length} did not run.`;
+        }
+      }
+      content.push({ type: 'text', text });
+      return { content, isError: true };
+    }
+
+    const shotText = screenshots > 0 ? ` The ${screenshots} screenshot(s) are in viewport coordinates.` : '';
+    content.push({ type: 'text', text: `Ran ${commands.length} command(s).${shotText}` });
+    return { content };
   }
 
   /**

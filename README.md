@@ -66,6 +66,7 @@ Godot MCP enables AI agents to launch the Godot editor, run projects, capture de
 - **Run Godot Scenes**: Execute a specific scene with configurable timeout and captured output
 - **Capture Debug Output**: Retrieve console output and error messages
 - **Capture Screenshots**: Return a PNG of the running game to the agent, so it can check what the player sees
+- **Simulate Input**: Click, drag, type, press keys and fire input actions in the running game
 - **Control Execution**: Start and stop Godot projects programmatically
 - **Get Godot Version**: Retrieve the installed Godot version
 - **List Godot Projects**: Find Godot projects in a specified directory
@@ -92,7 +93,7 @@ Use `run_scene` for an F6-style run of one scene while keeping output compatible
 | `scenePath` | Yes | A `res://` path or path relative to the project. `.tscn` and `.scn` are supported |
 | `timeoutMs` | No | Stops the scene automatically after this many milliseconds. Defaults to `30000` |
 | `args` | No | Arguments for the game, passed after `--` so the game reads them with `OS.get_cmdline_user_args()` |
-| `harness` | No | Run the game under the harness main loop that `capture_screenshot` needs. Defaults to `true` |
+| `harness` | No | Run the game under the harness main loop that `capture_screenshot` and `simulate_input` need. Defaults to `true` |
 
 ```json
 {
@@ -117,9 +118,40 @@ Nothing is installed into the project. Both run tools start Godot with `-s build
 
 The harness listens on `127.0.0.1` only, on a free port the server picks for each run, and only answers requests that carry a random token made for that run. The server hands both to the game in the `GODOT_MCP_HARNESS_PORT` and `GODOT_MCP_HARNESS_TOKEN` environment variables, and the game prints `[godot-mcp harness] listening on 127.0.0.1:<port>` once it is ready. The harness stays closed in a release build.
 
-Pass `harness: false` to `run_project` or `run_scene` for a project that sets its own main loop type, since `-s` takes its place. `capture_screenshot` then refuses to run.
+Pass `harness: false` to `run_project` or `run_scene` for a project that sets its own main loop type, since `-s` takes its place. `capture_screenshot` and `simulate_input` then refuse to run.
 
 A game that runs headless draws nothing, so the call fails. While a script error holds the game at the `debug>` prompt, the call times out after 15 seconds.
+
+### Simulate Input
+
+`simulate_input` sends a list of commands to the game started by `run_project` or `run_scene` and runs them in order, through the same harness. Positions are in the game's viewport coordinates, so a point read off a screenshot, or a node position from a scene file, is the point to click.
+
+| Command | Fields |
+| --- | --- |
+| `click` | `x`, `y`, `button` (`left`, `right` or `middle`, default `left`), `double` |
+| `mouse_move` | `x`, `y` |
+| `mouse_drag` | `from_x`, `from_y`, `to_x`, `to_y`, `button` |
+| `key` | `key`, a Godot key name such as `A`, `Space`, `Enter`, `Escape`, `Up`, `F5` or `Ctrl+S`, and `modifiers` from `shift`, `ctrl`, `alt` and `meta` |
+| `action` | `action` from the Input Map or a built-in one such as `ui_accept`, and `pressed` (default `true`) |
+| `action_pulse` | `action`, and `duration_ms` to hold it (default `100`) |
+| `text` | `text`, and `delay_ms` between characters (default `50`) |
+| `wait` | `duration_ms` (default `100`) |
+| `screenshot` | No fields. The image comes back with the result |
+
+```json
+{
+  "commands": [
+    { "type": "click", "x": 480, "y": 260 },
+    { "type": "action_pulse", "action": "ui_accept" },
+    { "type": "wait", "duration_ms": 500 },
+    { "type": "screenshot" }
+  ]
+}
+```
+
+Events go through `Input.parse_input_event()`, so the game gets them like real input. GUI controls react, actions bound to a key fire, and `_input` and `_unhandled_input` receive them. The `action` commands send `InputEventAction` events. The sequence stops at the first command that fails and says which one. `timeoutMs` (default `30000`) covers the whole sequence, and when it runs out the harness drops the remaining commands instead of sending them late.
+
+The real mouse cursor stays put unless you pass `warpMouse: true`. Clicks, drags and GUI hover work without it, but `get_global_mouse_position()` and `get_mouse_position()` read the real cursor, so a game that aims or hovers with those needs it. Warping moves the cursor on your desktop.
 
 ### Run GUT Tests
 
@@ -192,6 +224,7 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
         "get_debug_output",
         "stop_project",
         "capture_screenshot",
+        "simulate_input",
         "run_gut_tests",
         "get_godot_version",
         "list_projects",
@@ -295,7 +328,7 @@ The Godot MCP server uses a bundled GDScript approach for complex operations:
 
 1. **Direct Commands**: Simple operations like launching the editor or getting project info use Godot's built-in CLI commands directly.
 2. **Bundled Operations Script**: Complex operations like creating scenes or adding nodes use a single, comprehensive GDScript file (`godot_operations.gd`) that handles all operations.
-3. **Harness Main Loop**: `run_project` and `run_scene` pass `mcp_harness.gd` to Godot with `-s`, so tools like `capture_screenshot` can reach the running game without installing anything into the project.
+3. **Harness Main Loop**: `run_project` and `run_scene` pass `mcp_harness.gd` to Godot with `-s`, so `capture_screenshot` and `simulate_input` can reach the running game without installing anything into the project.
 
 The bundled script accepts operation type and parameters as JSON, allowing for flexible and dynamic operation execution without generating temporary files for each operation.
 
