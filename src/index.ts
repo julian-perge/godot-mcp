@@ -29,6 +29,8 @@ const DEFAULT_SCENE_TIMEOUT_MS = 30000;
 const MAX_SCENE_TIMEOUT_MS = 2147483647;
 const PROCESS_EXIT_WAIT_MS = 1000;
 const OUTPUT_BUFFER_LIMIT = 1000; // Max lines to keep per stream
+const DEFAULT_GUT_TIMEOUT_MS = 600000;
+const GUT_OUTPUT_LIMIT_CHARS = 200000; // Tail of GUT stdout returned to the client
 
 const execFileAsync = promisify(execFile);
 
@@ -110,6 +112,8 @@ class GodotServer {
   private editorLogLines: string[] = [];
   // Track the editor process spawned by launch_editor so quit_godot can close it
   private editorProcess: ChildProcessWithoutNullStreams | null = null;
+  // The GUT run in progress, so a second call is refused and cleanup can stop it
+  private gutProcess: ChildProcessWithoutNullStreams | null = null;
 
   /**
    * Parameter name mappings between snake_case and camelCase
@@ -132,6 +136,11 @@ class GodotServer {
     'recursive': 'recursive',
     'scene': 'scene',
     'line_count': 'lineCount',
+    // GUT-related params
+    'unit_test_name': 'unitTestName',
+    'inner_class': 'innerClass',
+    'include_subdirs': 'includeSubdirs',
+    'timeout_ms': 'timeoutMs',
   };
 
   /**
@@ -445,6 +454,10 @@ class GodotServer {
     if (this.currentProcess?.isRunning) {
       this.logDebug('Killing running Godot process');
       await this.stopCurrentProcess();
+    }
+    if (this.gutProcess) {
+      this.logDebug('Killing running GUT process');
+      this.gutProcess.kill('SIGKILL');
     }
     // The editor is left open on purpose. Cleanup runs whenever the client
     // disconnects, and the editor may hold unsaved work, so only quit_godot
@@ -803,6 +816,62 @@ class GodotServer {
           },
         },
         {
+          name: 'run_gut_tests',
+          description: 'Run GUT tests (res://addons/gut/gut_cmdln.gd) and wait for the result. With no test or dir it runs what .gutconfig.json lists. Passing test runs only those scripts. Fails when GUT reports failures or exits non-zero.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              test: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional: res:// test scripts to run, e.g. ["res://test/unit/test_battle.gd"]. The .gutconfig.json dirs are skipped unless dir is also given.',
+              },
+              dir: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional: res:// directories to search for tests instead of the .gutconfig.json dirs, e.g. ["res://test/unit"]',
+              },
+              unitTestName: {
+                type: 'string',
+                description: 'Optional: Only run tests whose name contains this text (-gunit_test_name)',
+              },
+              select: {
+                type: 'string',
+                description: 'Optional: Only run scripts whose file name contains this text (-gselect)',
+              },
+              innerClass: {
+                type: 'string',
+                description: 'Optional: Only run inner test classes whose name contains this text (-ginner_class)',
+              },
+              includeSubdirs: {
+                type: 'boolean',
+                description: 'Optional: Search subdirectories of dir (default: true)',
+              },
+              headless: {
+                type: 'boolean',
+                description: 'Optional: Run without a window (default: true). Use false for tests that need rendering.',
+              },
+              log: {
+                type: 'integer',
+                description: 'Optional: GUT log level 0-3',
+                minimum: 0,
+                maximum: 3,
+              },
+              timeoutMs: {
+                type: 'integer',
+                description: 'Optional: Stop the run after this many milliseconds (default: 600000)',
+                minimum: 1,
+                maximum: MAX_SCENE_TIMEOUT_MS,
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
           name: 'get_godot_version',
           description: 'Get the installed Godot version',
           inputSchema: {
@@ -1047,6 +1116,8 @@ class GodotServer {
           return await this.handleGetDebugOutput();
         case 'stop_project':
           return await this.handleStopProject();
+        case 'run_gut_tests':
+          return await this.handleRunGutTests(request.params.arguments);
         case 'get_godot_version':
           return await this.handleGetGodotVersion();
         case 'list_projects':
@@ -1673,6 +1744,195 @@ class GodotServer {
         },
       ],
     };
+  }
+
+  /**
+   * Check a test or dir argument of run_gut_tests and return it as a list.
+   * GUT splits list options on commas and cuts values at a second "=", so
+   * entries containing either are refused instead of being misread.
+   */
+  private parseGutPathList(value: unknown, field: string): { paths: string[] } | { error: string } {
+    if (value === undefined || value === null || value === '') {
+      return { paths: [] };
+    }
+    const list = Array.isArray(value) ? value : [value];
+    for (const item of list) {
+      if (
+        typeof item !== 'string'
+        || !item.startsWith('res://')
+        || !this.validatePath(item)
+        || item.includes(',')
+        || item.includes('=')
+      ) {
+        return { error: `${field} entries must be res:// paths without "..", "," or "="` };
+      }
+    }
+    return { paths: list as string[] };
+  }
+
+  /**
+   * Handle the run_gut_tests tool
+   */
+  private async handleRunGutTests(args: any) {
+    args = this.normalizeParameters(args || {});
+
+    if (!args.projectPath) {
+      return this.createErrorResponse('Project path is required', [
+        'Provide a valid path to a Godot project directory',
+      ]);
+    }
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse('Invalid project path', [
+        'Provide a valid path without ".." or other potentially unsafe characters',
+      ]);
+    }
+
+    const tests = this.parseGutPathList(args.test, 'test');
+    const dirs = this.parseGutPathList(args.dir, 'dir');
+    if ('error' in tests || 'error' in dirs) {
+      return this.createErrorResponse(
+        'error' in tests ? tests.error : (dirs as { error: string }).error,
+        ['Pass paths such as res://test/unit/test_player.gd or res://test/unit']
+      );
+    }
+
+    for (const field of ['unitTestName', 'select', 'innerClass']) {
+      const value = args[field];
+      if (value !== undefined && (typeof value !== 'string' || value.includes('='))) {
+        return this.createErrorResponse(`${field} must be a string without "="`, [
+          'GUT cuts option values at a second "="',
+        ]);
+      }
+    }
+
+    const timeoutMs = args.timeoutMs ?? DEFAULT_GUT_TIMEOUT_MS;
+    if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_SCENE_TIMEOUT_MS) {
+      return this.createErrorResponse(
+        `timeoutMs must be an integer between 1 and ${MAX_SCENE_TIMEOUT_MS}`,
+        [`Omit it to use ${DEFAULT_GUT_TIMEOUT_MS}`]
+      );
+    }
+
+    if (this.gutProcess) {
+      return this.createErrorResponse('A GUT run is already in progress', [
+        'Wait for it to finish before starting another one',
+      ]);
+    }
+
+    try {
+      if (!this.godotPath) {
+        await this.detectGodotPath();
+        if (!this.godotPath) {
+          return this.createErrorResponse('Could not find a valid Godot executable path', [
+            'Ensure Godot is installed correctly',
+            'Set GODOT_PATH environment variable to specify the correct path',
+          ]);
+        }
+      }
+
+      if (!existsSync(join(args.projectPath, 'project.godot'))) {
+        return this.createErrorResponse(`Not a valid Godot project: ${args.projectPath}`, [
+          'Ensure the path points to a directory containing a project.godot file',
+          'Use list_projects to find valid Godot projects',
+        ]);
+      }
+      if (!existsSync(join(args.projectPath, 'addons', 'gut', 'gut_cmdln.gd'))) {
+        return this.createErrorResponse('GUT is not installed in this project', [
+          'Install GUT so that res://addons/gut/gut_cmdln.gd exists',
+        ]);
+      }
+      const hasGutConfig = existsSync(join(args.projectPath, '.gutconfig.json'));
+      if (tests.paths.length === 0 && dirs.paths.length === 0 && !hasGutConfig) {
+        return this.createErrorResponse('No tests to run', [
+          'Pass test or dir, or add a .gutconfig.json that lists dirs',
+        ]);
+      }
+
+      const cmdArgs: string[] = [];
+      if (args.headless !== false) {
+        cmdArgs.push('--headless');
+      }
+      cmdArgs.push('--path', args.projectPath, '-s', 'res://addons/gut/gut_cmdln.gd', '-gexit');
+      if (tests.paths.length > 0) {
+        cmdArgs.push(`-gtest=${tests.paths.join(',')}`);
+      }
+      if (dirs.paths.length > 0) {
+        cmdArgs.push(`-gdir=${dirs.paths.join(',')}`);
+      } else if (tests.paths.length > 0) {
+        // -gtest adds to the .gutconfig.json dirs instead of replacing them,
+        // so an empty -gdir= is what limits the run to the named scripts.
+        cmdArgs.push('-gdir=');
+      }
+      if (args.includeSubdirs !== false) {
+        cmdArgs.push('-ginclude_subdirs');
+      }
+      if (typeof args.log === 'number') cmdArgs.push(`-glog=${args.log}`);
+      if (args.unitTestName) cmdArgs.push(`-gunit_test_name=${args.unitTestName}`);
+      if (args.select) cmdArgs.push(`-gselect=${args.select}`);
+      if (args.innerClass) cmdArgs.push(`-ginner_class=${args.innerClass}`);
+
+      this.logDebug(`Running GUT with args: ${JSON.stringify(cmdArgs)}`);
+
+      const child = spawn(this.godotPath!, cmdArgs, { stdio: 'pipe' });
+      this.gutProcess = child;
+      let stdoutBuf = '';
+      let stderrBuf = '';
+      let timedOut = false;
+
+      const { exitCode, signal } = await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        const timer = setTimeout(() => {
+          timedOut = true;
+          child.kill();
+          setTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) {
+              child.kill('SIGKILL');
+            }
+          }, PROCESS_EXIT_WAIT_MS);
+        }, timeoutMs);
+        child.stdout.on('data', (d: Buffer) => {
+          stdoutBuf = (stdoutBuf + d.toString()).slice(-GUT_OUTPUT_LIMIT_CHARS);
+        });
+        child.stderr.on('data', (d: Buffer) => {
+          stderrBuf = (stderrBuf + d.toString()).slice(-GUT_OUTPUT_LIMIT_CHARS);
+        });
+        child.on('error', (err: Error) => {
+          stderrBuf += `\nProcess error: ${err.message}`;
+          clearTimeout(timer);
+          resolve({ exitCode: null, signal: null });
+        });
+        child.on('close', (code: number | null, closeSignal: NodeJS.Signals | null) => {
+          clearTimeout(timer);
+          resolve({ exitCode: code, signal: closeSignal });
+        });
+      });
+
+      const out = stdoutBuf.trim();
+      const err = stderrBuf.trim();
+      const status = timedOut
+        ? `GUT run timed out after ${timeoutMs} ms`
+        : exitCode === 0
+          ? 'GUT tests passed'
+          : `GUT tests failed (exit code ${exitCode ?? signal})`;
+      const text = `${status}\n\nCommand: godot ${cmdArgs.join(' ')}\n\nSTDOUT:\n${out || '(empty)'}\n\nSTDERR:\n${err || '(empty)'}`;
+
+      // GUT exits non-zero when a test fails, and the engine prints warnings to
+      // stderr even on a green run, so only the exit code decides the result.
+      if (timedOut || exitCode !== 0) {
+        return this.createErrorResponse(text, [
+          'Review the output for failing assertions',
+          'Pass test or unitTestName to narrow the run',
+        ]);
+      }
+      return { content: [{ type: 'text', text }] };
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return this.createErrorResponse(`Failed to run GUT tests: ${errorMessage}`, [
+        'Ensure Godot and GUT are installed in the project',
+        'Verify addons/gut/gut_cmdln.gd exists in the project',
+      ]);
+    } finally {
+      this.gutProcess = null;
+    }
   }
 
   /**

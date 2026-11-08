@@ -105,6 +105,33 @@ Use `run_scene` for an F6-style run of one scene while keeping output compatible
 
 Both tools pass `-d`, which turns on Godot's local debugger. A runtime script error pauses the game at a `debug>` prompt, and the error shows up in `get_debug_output`. Call `stop_project` to end it.
 
+### Run GUT Tests
+
+`run_gut_tests` runs [GUT](https://github.com/bitwes/Gut) through `res://addons/gut/gut_cmdln.gd`, waits for it, and returns the output. The call fails when GUT exits non-zero, which it does when a test fails.
+
+| Parameter | Required | Description |
+| --- | --- | --- |
+| `projectPath` | Yes | Path to the directory containing `project.godot` |
+| `test` | No | `res://` test scripts to run. Only these run, even when `.gutconfig.json` lists dirs |
+| `dir` | No | `res://` directories to search instead of the `.gutconfig.json` dirs |
+| `unitTestName` | No | Only run tests whose name contains this text |
+| `select` | No | Only run scripts whose file name contains this text |
+| `innerClass` | No | Only run inner test classes whose name contains this text |
+| `includeSubdirs` | No | Search subdirectories of `dir`. Defaults to `true` |
+| `headless` | No | Run without a window. Defaults to `true` |
+| `log` | No | GUT log level from 0 to 3 |
+| `timeoutMs` | No | Stops the run after this many milliseconds. Defaults to `600000` |
+
+With neither `test` nor `dir`, GUT runs what `.gutconfig.json` lists. One run happens at a time.
+
+```json
+{
+  "projectPath": "/path/to/project",
+  "test": ["res://test/unit/test_battle_runner.gd"],
+  "unitTestName": "misses"
+}
+```
+
 ## Requirements
 
 - [Godot Engine](https://godotengine.org/download) installed on your system
@@ -148,6 +175,7 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
         "run_scene",
         "get_debug_output",
         "stop_project",
+        "run_gut_tests",
         "get_godot_version",
         "list_projects",
         "get_project_info",
