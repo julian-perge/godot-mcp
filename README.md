@@ -65,6 +65,7 @@ Godot MCP enables AI agents to launch the Godot editor, run projects, capture de
 - **Run Godot Projects**: Execute Godot projects in debug mode
 - **Run Godot Scenes**: Execute a specific scene with configurable timeout and captured output
 - **Capture Debug Output**: Retrieve console output and error messages
+- **Capture Screenshots**: Return a PNG of the running game to the agent, so it can check what the player sees
 - **Control Execution**: Start and stop Godot projects programmatically
 - **Get Godot Version**: Retrieve the installed Godot version
 - **List Godot Projects**: Find Godot projects in a specified directory
@@ -91,6 +92,7 @@ Use `run_scene` for an F6-style run of one scene while keeping output compatible
 | `scenePath` | Yes | A `res://` path or path relative to the project. `.tscn` and `.scn` are supported |
 | `timeoutMs` | No | Stops the scene automatically after this many milliseconds. Defaults to `30000` |
 | `args` | No | Arguments for the game, passed after `--` so the game reads them with `OS.get_cmdline_user_args()` |
+| `harness` | No | Run the game under the harness main loop that `capture_screenshot` needs. Defaults to `true` |
 
 ```json
 {
@@ -104,6 +106,20 @@ Use `run_scene` for an F6-style run of one scene while keeping output compatible
 `run_project` takes the same `args`. Only one Godot process runs at a time, so starting a run stops the previous one. `get_debug_output` keeps working after the process exits, crashes or times out, and reports `running`, `exitCode` and `stoppedByTimeout` next to the last 1000 lines of stdout and stderr. `stop_project` returns the final output and clears it.
 
 Both tools pass `-d`, which turns on Godot's local debugger. A runtime script error pauses the game at a `debug>` prompt, and the error shows up in `get_debug_output`. Call `stop_project` to end it.
+
+### Capture Screenshots
+
+`capture_screenshot` returns a PNG of what the game started by `run_project` or `run_scene` is drawing right now, as an image the agent can look at. Pass `savePath`, an absolute path ending in `.png`, to also write it to disk.
+
+The image is in the game's viewport coordinates, the ones node positions use. With stretch mode `canvas_items` or `viewport` it has the base size from the project settings, whatever the window size or screen scale, so a project with an 800x600 base and a 1600x1200 window gives 800x600 screenshots.
+
+Nothing is installed into the project. Both run tools start Godot with `-s build/scripts/mcp_harness.gd`, which makes the harness the game's main loop. It is a `SceneTree`, so the project's autoloads, its main scene or the scene you passed, and your `args` load as usual. The harness never writes files.
+
+The harness listens on `127.0.0.1` only, on a free port the server picks for each run, and only answers requests that carry a random token made for that run. The server hands both to the game in the `GODOT_MCP_HARNESS_PORT` and `GODOT_MCP_HARNESS_TOKEN` environment variables, and the game prints `[godot-mcp harness] listening on 127.0.0.1:<port>` once it is ready. The harness stays closed in a release build.
+
+Pass `harness: false` to `run_project` or `run_scene` for a project that sets its own main loop type, since `-s` takes its place. `capture_screenshot` then refuses to run.
+
+A game that runs headless draws nothing, so the call fails. While a script error holds the game at the `debug>` prompt, the call times out after 15 seconds.
 
 ### Run GUT Tests
 
@@ -175,6 +191,7 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
         "run_scene",
         "get_debug_output",
         "stop_project",
+        "capture_screenshot",
         "run_gut_tests",
         "get_godot_version",
         "list_projects",
@@ -278,6 +295,7 @@ The Godot MCP server uses a bundled GDScript approach for complex operations:
 
 1. **Direct Commands**: Simple operations like launching the editor or getting project info use Godot's built-in CLI commands directly.
 2. **Bundled Operations Script**: Complex operations like creating scenes or adding nodes use a single, comprehensive GDScript file (`godot_operations.gd`) that handles all operations.
+3. **Harness Main Loop**: `run_project` and `run_scene` pass `mcp_harness.gd` to Godot with `-s`, so tools like `capture_screenshot` can reach the running game without installing anything into the project.
 
 The bundled script accepts operation type and parameters as JSON, allowing for flexible and dynamic operation execution without generating temporary files for each operation.
 

@@ -21,6 +21,14 @@ try {
   );
   
   console.log('Successfully copied godot_operations.gd to build/scripts');
+
+  // Copy the harness that run_project and run_scene pass to Godot with -s
+  fs.copyFileSync(
+    path.join(__dirname, '..', 'src', 'scripts', 'mcp_harness.gd'),
+    path.join(__dirname, '..', 'build', 'scripts', 'mcp_harness.gd')
+  );
+
+  console.log('Successfully copied mcp_harness.gd to build/scripts');
 } catch (error) {
   console.error('Error copying scripts:', error);
   process.exit(1);

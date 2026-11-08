@@ -9,9 +9,11 @@
 
 import { fileURLToPath } from 'url';
 import { join, dirname, basename, normalize, isAbsolute } from 'path';
-import { existsSync, readdirSync, mkdirSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process';
 import { promisify } from 'util';
+import { createConnection, createServer } from 'net';
+import { randomBytes } from 'crypto';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -69,6 +71,8 @@ interface GodotProcess {
   exitSignal?: string | null;
   stoppedByTimeout?: boolean;
   timeout?: NodeJS.Timeout;
+  // Where mcp_harness.gd listens in this game, when it was started with the harness
+  harness?: { port: number; token: string };
 }
 
 /**
@@ -78,7 +82,17 @@ interface StartProcessOptions {
   projectPath: string;
   scene?: string;
   args: string[];
+  harness: boolean;
   timeoutMs?: number;
+}
+
+/**
+ * One line of JSON that mcp_harness.gd answers a request with
+ */
+interface HarnessResponse {
+  ok: boolean;
+  error?: string;
+  results?: Array<Record<string, any>>;
 }
 
 /**
@@ -114,6 +128,9 @@ class GodotServer {
   private editorProcess: ChildProcessWithoutNullStreams | null = null;
   // The GUT run in progress, so a second call is refused and cleanup can stop it
   private gutProcess: ChildProcessWithoutNullStreams | null = null;
+  private harnessScriptPath: string;
+  // Harness requests run one at a time, so two tool calls never interleave
+  private harnessQueue: Promise<unknown> = Promise.resolve();
 
   /**
    * Parameter name mappings between snake_case and camelCase
@@ -136,6 +153,7 @@ class GodotServer {
     'recursive': 'recursive',
     'scene': 'scene',
     'line_count': 'lineCount',
+    'save_path': 'savePath',
     // GUT-related params
     'unit_test_name': 'unitTestName',
     'inner_class': 'innerClass',
@@ -185,6 +203,7 @@ class GodotServer {
 
     // Set the path to the operations script
     this.operationsScriptPath = join(__dirname, 'scripts', 'godot_operations.gd');
+    this.harnessScriptPath = join(__dirname, 'scripts', 'mcp_harness.gd');
     if (debugMode) console.error(`[DEBUG] Operations script path: ${this.operationsScriptPath}`);
 
     // Initialize the MCP server
@@ -764,6 +783,10 @@ class GodotServer {
                 items: { type: 'string' },
                 description: 'Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.',
               },
+              harness: {
+                type: 'boolean',
+                description: 'Optional: Run the game under the godot-mcp harness main loop so capture_screenshot works (default: true). Nothing is written to the project. Set false for a project with its own main loop type.',
+              },
             },
             required: ['projectPath'],
           },
@@ -793,8 +816,26 @@ class GodotServer {
                 items: { type: 'string' },
                 description: 'Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.',
               },
+              harness: {
+                type: 'boolean',
+                description: 'Optional: Run the game under the godot-mcp harness main loop so capture_screenshot works (default: true). Nothing is written to the project. Set false for a project with its own main loop type.',
+              },
             },
             required: ['projectPath', 'scenePath'],
+          },
+        },
+        {
+          name: 'capture_screenshot',
+          description: 'Capture a PNG of what the game started by run_project or run_scene is rendering right now, returned as an image. The image is in the game\'s viewport coordinates, the ones node positions use, so with stretch mode canvas_items or viewport it has the project\'s base size whatever the window size. Fails for a headless game, and times out while a script error holds the game at a "debug>" prompt.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              savePath: {
+                type: 'string',
+                description: 'Optional: Absolute path of a .png file to also write the screenshot to',
+              },
+            },
+            required: [],
           },
         },
         {
@@ -1118,6 +1159,8 @@ class GodotServer {
           return await this.handleStopProject();
         case 'run_gut_tests':
           return await this.handleRunGutTests(request.params.arguments);
+        case 'capture_screenshot':
+          return await this.handleCaptureScreenshot(request.params.arguments);
         case 'get_godot_version':
           return await this.handleGetGodotVersion();
         case 'list_projects':
@@ -1315,18 +1358,17 @@ class GodotServer {
         );
       }
 
-      const cmdArgs = ['-d', '--path', args.projectPath];
       const scene = args.scene && this.validatePath(args.scene) ? args.scene : undefined;
       if (scene) {
         this.logDebug(`Adding scene parameter: ${scene}`);
-        cmdArgs.push(scene);
       }
 
       this.logDebug(`Running Godot project: ${args.projectPath}`);
-      await this.startGodotProcess(cmdArgs, 'project', {
+      await this.startGodotProcess('project', {
         projectPath: args.projectPath,
         scene,
         args: userArgs,
+        harness: args.harness !== false,
       });
 
       return {
@@ -1448,12 +1490,12 @@ class GodotServer {
       }
 
       const godotScenePath = `res://${normalizedResourcePath}`;
-      const cmdArgs = ['-d', '--path', projectPath, godotScenePath];
       this.logDebug(`Running Godot scene: ${godotScenePath} in project: ${projectPath}`);
-      await this.startGodotProcess(cmdArgs, `scene ${godotScenePath}`, {
+      await this.startGodotProcess(`scene ${godotScenePath}`, {
         projectPath,
         scene: godotScenePath,
         args: userArgs,
+        harness: rawArgs.harness !== false,
         timeoutMs,
       });
 
@@ -1520,7 +1562,6 @@ class GodotServer {
    * Start a Godot process and capture its output for the debug tools.
    */
   private async startGodotProcess(
-    cmdArgs: string[],
     description: string,
     options: StartProcessOptions
   ): Promise<void> {
@@ -1529,8 +1570,24 @@ class GodotServer {
       await this.stopCurrentProcess();
     }
 
-    const spawnArgs = options.args.length > 0 ? [...cmdArgs, '--', ...options.args] : cmdArgs;
-    const childProcess = spawn(this.godotPath!, spawnArgs, { stdio: 'pipe' });
+    // Godot hands everything after "--" to the game, so the game's args go last.
+    const spawnArgs = ['-d', '--path', options.projectPath];
+    const env = { ...process.env };
+    let harness: GodotProcess['harness'];
+    if (options.harness) {
+      harness = { port: await this.pickFreePort(), token: randomBytes(16).toString('hex') };
+      spawnArgs.push('-s', this.harnessScriptPath);
+      env.GODOT_MCP_HARNESS_PORT = String(harness.port);
+      env.GODOT_MCP_HARNESS_TOKEN = harness.token;
+    }
+    if (options.scene) {
+      spawnArgs.push(options.scene);
+    }
+    if (options.args.length > 0) {
+      spawnArgs.push('--', ...options.args);
+    }
+
+    const childProcess = spawn(this.godotPath!, spawnArgs, { stdio: 'pipe', env });
     const godotProcess: GodotProcess = {
       process: childProcess,
       description,
@@ -1543,6 +1600,7 @@ class GodotServer {
       droppedErrorLines: 0,
       startedAt: new Date(),
       isRunning: true,
+      harness,
     };
     this.currentProcess = godotProcess;
 
@@ -1744,6 +1802,155 @@ class GodotServer {
         },
       ],
     };
+  }
+
+  /**
+   * Ask the OS for a free loopback port by binding port 0. The port is
+   * released before Godot binds it, which leaves a short window in which
+   * another process could take it, and the harness then logs that it could
+   * not listen.
+   */
+  private pickFreePort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const server = createServer();
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address();
+        if (address && typeof address === 'object') {
+          const port = address.port;
+          server.close(() => resolve(port));
+        } else {
+          server.close();
+          reject(new Error('Failed to pick a free port'));
+        }
+      });
+    });
+  }
+
+  /**
+   * Send commands to mcp_harness.gd in the running game and return its answer.
+   * Calls are queued so that two tool calls never interleave their commands.
+   */
+  private requestHarness(commands: object[], timeoutMs: number): Promise<HarnessResponse> {
+    const run = () => this.sendHarnessRequest(commands, timeoutMs);
+    const result = this.harnessQueue.then(run, run);
+    this.harnessQueue = result.catch(() => undefined);
+    return result;
+  }
+
+  private async sendHarnessRequest(commands: object[], timeoutMs: number): Promise<HarnessResponse> {
+    const godotProcess = this.currentProcess;
+    if (!godotProcess?.isRunning) {
+      throw new Error('No game is running. Start one with run_project or run_scene first.');
+    }
+    if (!godotProcess.harness) {
+      throw new Error('The running game was started with harness: false. Start it again without that option.');
+    }
+    const payload = JSON.stringify({ token: godotProcess.harness.token, commands }) + '\n';
+    const deadline = Date.now() + timeoutMs;
+    // The harness starts listening only once the engine has booted, so a
+    // refused connection right after run_project means "not yet".
+    for (;;) {
+      try {
+        return await this.harnessExchange(godotProcess.harness.port, payload, deadline);
+      } catch (error: any) {
+        if (error?.code === 'ECONNREFUSED' && godotProcess.isRunning && Date.now() + 250 < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private harnessExchange(port: number, payload: string, deadline: number): Promise<HarnessResponse> {
+    return new Promise((resolve, reject) => {
+      const socket = createConnection({ host: '127.0.0.1', port });
+      const chunks: Buffer[] = [];
+      let settled = false;
+      const finish = (error: Error | null, value?: HarnessResponse) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        if (error) {
+          reject(error);
+        } else {
+          resolve(value!);
+        }
+      };
+      const timer = setTimeout(() => {
+        finish(new Error('The game did not answer in time. If get_debug_output ends at a "debug>" prompt, a script error has paused it.'));
+      }, Math.max(1, deadline - Date.now()));
+      socket.on('connect', () => socket.write(payload));
+      socket.on('data', (chunk: Buffer) => {
+        chunks.push(chunk);
+        if (chunk.includes(10)) {
+          const line = Buffer.concat(chunks).toString('utf8').split('\n')[0];
+          try {
+            finish(null, JSON.parse(line) as HarnessResponse);
+          } catch {
+            finish(new Error('The harness answered with something that is not JSON'));
+          }
+        }
+      });
+      socket.on('error', (error) => finish(error));
+      socket.on('close', () => finish(new Error('The harness closed the connection without answering')));
+    });
+  }
+
+  /**
+   * Handle the capture_screenshot tool
+   */
+  private async handleCaptureScreenshot(args: any) {
+    args = this.normalizeParameters(args || {});
+
+    if (args.savePath !== undefined) {
+      if (
+        typeof args.savePath !== 'string'
+        || !isAbsolute(args.savePath)
+        || !args.savePath.toLowerCase().endsWith('.png')
+        || !this.validatePath(args.savePath)
+        || !existsSync(dirname(args.savePath))
+      ) {
+        return this.createErrorResponse('Invalid savePath', [
+          'Use an absolute path ending in .png, without "..", in a directory that exists',
+        ]);
+      }
+    }
+
+    try {
+      const response = await this.requestHarness([{ type: 'screenshot' }], 15000);
+      const shot = response.results?.[0];
+      if (!response.ok || !shot?.png_base64) {
+        return this.createErrorResponse(
+          `Screenshot failed: ${shot?.error ?? response.error ?? 'no image in the answer'}`,
+          ['A game that runs headless draws nothing, so a screenshot needs a windowed run']
+        );
+      }
+
+      let saved = '';
+      if (args.savePath) {
+        writeFileSync(args.savePath, Buffer.from(shot.png_base64, 'base64'));
+        saved = ` Also saved to ${args.savePath}.`;
+      }
+      return {
+        content: [
+          { type: 'image', data: shot.png_base64, mimeType: 'image/png' },
+          {
+            type: 'text',
+            text: `Screenshot of the running game, ${shot.width}x${shot.height} px in viewport coordinates.${saved}`,
+          },
+        ],
+      };
+    } catch (error: any) {
+      return this.createErrorResponse(`Failed to capture screenshot: ${error?.message || 'Unknown error'}`, [
+        'Start the game with run_project or run_scene first',
+        'Check get_debug_output for "[godot-mcp harness] listening on" to confirm the harness started',
+      ]);
+    }
   }
 
   /**
