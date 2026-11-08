@@ -104,12 +104,27 @@ test('run_scene integrates with process and debug tools', {
       arguments: {
         projectPath: fixturePath,
         scenePath: 'res://tests/smoke_test.tscn',
-        timeoutMs: 500,
+        timeoutMs: 3000,
+        args: ['--battle=1009'],
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    const afterTimeout = await client.callTool({ name: 'get_debug_output', arguments: {} });
-    assert.match(getText(afterTimeout), /No active Godot process/);
+    let afterTimeout;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      afterTimeout = JSON.parse(getText(await client.callTool({ name: 'get_debug_output', arguments: {} })));
+      if (!afterTimeout.running) {
+        break;
+      }
+    }
+    assert.equal(afterTimeout.running, false);
+    assert.equal(afterTimeout.stoppedByTimeout, true);
+    assert.ok(afterTimeout.output.includes('RUN_SCENE_TEST_OK'));
+    assert.ok(afterTimeout.output.includes('RUN_SCENE_USER_ARGS ["--battle=1009"]'));
+
+    const stoppedAfterExit = await client.callTool({ name: 'stop_project', arguments: {} });
+    assert.match(getText(stoppedAfterExit), /already exited/);
+    const afterStop = await client.callTool({ name: 'get_debug_output', arguments: {} });
+    assert.match(getText(afterStop), /No active Godot process/);
   } finally {
     try {
       await client.callTool({ name: 'stop_project', arguments: {} });

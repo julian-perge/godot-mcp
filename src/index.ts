@@ -28,6 +28,7 @@ const GODOT_DEBUG_MODE: boolean = true; // Always use GODOT DEBUG MODE
 const DEFAULT_SCENE_TIMEOUT_MS = 30000;
 const MAX_SCENE_TIMEOUT_MS = 2147483647;
 const PROCESS_EXIT_WAIT_MS = 1000;
+const OUTPUT_BUFFER_LIMIT = 1000; // Max lines to keep per stream
 
 const execFileAsync = promisify(execFile);
 
@@ -45,13 +46,37 @@ function resolveResourcePath(projectPath: string, resourcePath: string): string 
 }
 
 /**
- * Interface representing a running Godot process
+ * A Godot process started by run_project or run_scene. The record outlives
+ * the process, so its output and exit status can still be read after a
+ * crash or a timeout, until the next run or stop_project replaces it.
  */
 interface GodotProcess {
   process: ChildProcessWithoutNullStreams;
+  description: string;
+  projectPath: string;
+  scene?: string;
+  args: string[];
   output: string[];
   errors: string[];
+  droppedOutputLines: number;
+  droppedErrorLines: number;
+  startedAt: Date;
+  isRunning: boolean;
+  exitedAt?: Date;
+  exitCode?: number | null;
+  exitSignal?: string | null;
+  stoppedByTimeout?: boolean;
   timeout?: NodeJS.Timeout;
+}
+
+/**
+ * Options for startGodotProcess
+ */
+interface StartProcessOptions {
+  projectPath: string;
+  scene?: string;
+  args: string[];
+  timeoutMs?: number;
 }
 
 /**
@@ -76,7 +101,7 @@ interface OperationParams {
  */
 class GodotServer {
   private server: Server;
-  private activeProcess: GodotProcess | null = null;
+  private currentProcess: GodotProcess | null = null;
   private godotPath: string | null = null;
   private operationsScriptPath: string;
   private validatedPaths: Map<string, boolean> = new Map();
@@ -167,11 +192,17 @@ class GodotServer {
     // Error handling
     this.server.onerror = (error) => console.error('[MCP Error]', error);
 
-    // Cleanup on exit
-    process.on('SIGINT', async () => {
+    // A Godot child does not exit with this server, so a run left behind
+    // keeps its window open after the client goes away. Stop it when the
+    // client closes stdin or the server is asked to terminate.
+    const shutdown = async () => {
       await this.cleanup();
       process.exit(0);
-    });
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+    process.on('SIGHUP', shutdown);
+    process.stdin.on('end', shutdown);
   }
 
   /**
@@ -406,9 +437,9 @@ class GodotServer {
    */
   private async cleanup() {
     this.logDebug('Cleaning up resources');
-    if (this.activeProcess) {
-      this.logDebug('Killing active Godot process');
-      await this.stopActiveGodotProcess();
+    if (this.currentProcess?.isRunning) {
+      this.logDebug('Killing running Godot process');
+      await this.stopCurrentProcess();
     }
     await this.server.close();
   }
@@ -695,7 +726,7 @@ class GodotServer {
         },
         {
           name: 'run_project',
-          description: 'Run the Godot project and capture output',
+          description: 'Run the Godot project and capture output. Starting a run stops the previous one. The game runs with Godot\'s local debugger, so a runtime script error pauses it at a "debug>" prompt that get_debug_output shows.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -707,13 +738,18 @@ class GodotServer {
                 type: 'string',
                 description: 'Optional: Specific scene to run',
               },
+              args: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.',
+              },
             },
             required: ['projectPath'],
           },
         },
         {
           name: 'run_scene',
-          description: 'Run a specific Godot scene and capture output',
+          description: 'Run a specific Godot scene and capture output. Starting a run stops the previous one. The game runs with Godot\'s local debugger, so a runtime script error pauses it at a "debug>" prompt that get_debug_output shows.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -731,13 +767,18 @@ class GodotServer {
                 minimum: 1,
                 maximum: MAX_SCENE_TIMEOUT_MS,
               },
+              args: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.',
+              },
             },
             required: ['projectPath', 'scenePath'],
           },
         },
         {
           name: 'get_debug_output',
-          description: 'Get the current debug output and errors',
+          description: 'Get the output, errors and status of the last run_project or run_scene process. Works while it runs and after it exits, crashes or times out, until the next run or stop_project. Keeps the last 1000 lines of each stream.',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -746,7 +787,7 @@ class GodotServer {
         },
         {
           name: 'stop_project',
-          description: 'Stop the currently running Godot project',
+          description: 'Stop the Godot process started by run_project or run_scene and return its final output',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -1119,14 +1160,27 @@ class GodotServer {
         );
       }
 
+      const userArgs = this.parseUserArgs(args.args);
+      if (!userArgs) {
+        return this.createErrorResponse(
+          'args must be an array of strings',
+          ['Pass game arguments such as ["--battle=1009"]']
+        );
+      }
+
       const cmdArgs = ['-d', '--path', args.projectPath];
-      if (args.scene && this.validatePath(args.scene)) {
-        this.logDebug(`Adding scene parameter: ${args.scene}`);
-        cmdArgs.push(args.scene);
+      const scene = args.scene && this.validatePath(args.scene) ? args.scene : undefined;
+      if (scene) {
+        this.logDebug(`Adding scene parameter: ${scene}`);
+        cmdArgs.push(scene);
       }
 
       this.logDebug(`Running Godot project: ${args.projectPath}`);
-      await this.startGodotProcess(cmdArgs, 'project');
+      await this.startGodotProcess(cmdArgs, 'project', {
+        projectPath: args.projectPath,
+        scene,
+        args: userArgs,
+      });
 
       return {
         content: [
@@ -1214,6 +1268,14 @@ class GodotServer {
       );
     }
 
+    const userArgs = this.parseUserArgs(rawArgs.args);
+    if (!userArgs) {
+      return this.createErrorResponse(
+        'args must be an array of strings',
+        ['Pass game arguments such as ["--battle=1009"]']
+      );
+    }
+
     try {
       const projectFile = join(projectPath, 'project.godot');
       if (!existsSync(projectFile)) {
@@ -1241,7 +1303,12 @@ class GodotServer {
       const godotScenePath = `res://${normalizedResourcePath}`;
       const cmdArgs = ['-d', '--path', projectPath, godotScenePath];
       this.logDebug(`Running Godot scene: ${godotScenePath} in project: ${projectPath}`);
-      await this.startGodotProcess(cmdArgs, `scene ${godotScenePath}`, timeoutMs);
+      await this.startGodotProcess(cmdArgs, `scene ${godotScenePath}`, {
+        projectPath,
+        scene: godotScenePath,
+        args: userArgs,
+        timeoutMs,
+      });
 
       return {
         content: [
@@ -1265,48 +1332,106 @@ class GodotServer {
   }
 
   /**
+   * Check the optional args parameter of run_project and run_scene.
+   * Returns null when it is not an array of strings. A leading "--" is
+   * dropped because startGodotProcess adds its own.
+   */
+  private parseUserArgs(value: unknown): string[] | null {
+    if (value === undefined || value === null) {
+      return [];
+    }
+    if (!Array.isArray(value) || !value.every((arg) => typeof arg === 'string')) {
+      return null;
+    }
+    return value[0] === '--' ? value.slice(1) : [...value];
+  }
+
+  /**
+   * Feed a child process stream to onLine one line at a time. A chunk can end
+   * in the middle of a line, so the unfinished tail waits for the next chunk,
+   * and flush() hands it over when the stream ends.
+   */
+  private lineSplitter(onLine: (line: string) => void) {
+    let partial = '';
+    return {
+      push: (chunk: Buffer) => {
+        partial += chunk.toString();
+        const lines = partial.split('\n');
+        partial = lines.pop() ?? '';
+        lines.forEach(onLine);
+      },
+      flush: () => {
+        if (partial) {
+          onLine(partial);
+        }
+        partial = '';
+      },
+    };
+  }
+
+  /**
    * Start a Godot process and capture its output for the debug tools.
    */
   private async startGodotProcess(
     cmdArgs: string[],
     description: string,
-    timeoutMs?: number
+    options: StartProcessOptions
   ): Promise<void> {
-    if (this.activeProcess) {
+    if (this.currentProcess?.isRunning) {
       this.logDebug('Killing existing Godot process before starting a new one');
-      await this.stopActiveGodotProcess();
+      await this.stopCurrentProcess();
     }
 
-    const childProcess = spawn(this.godotPath!, cmdArgs, { stdio: 'pipe' });
-    const output: string[] = [];
-    const errors: string[] = [];
-    const godotProcess: GodotProcess = { process: childProcess, output, errors };
-    this.activeProcess = godotProcess;
+    const spawnArgs = options.args.length > 0 ? [...cmdArgs, '--', ...options.args] : cmdArgs;
+    const childProcess = spawn(this.godotPath!, spawnArgs, { stdio: 'pipe' });
+    const godotProcess: GodotProcess = {
+      process: childProcess,
+      description,
+      projectPath: options.projectPath,
+      scene: options.scene,
+      args: options.args,
+      output: [],
+      errors: [],
+      droppedOutputLines: 0,
+      droppedErrorLines: 0,
+      startedAt: new Date(),
+      isRunning: true,
+    };
+    this.currentProcess = godotProcess;
 
-    childProcess.stdout?.on('data', (data: Buffer) => {
-      const lines = data.toString().split('\n');
-      output.push(...lines);
-      lines.forEach((line: string) => {
-        if (line.trim()) this.logDebug(`[Godot stdout] ${line}`);
-      });
-    });
+    const keepLine = (stream: 'stdout' | 'stderr') => (line: string) => {
+      const cleaned = line.replace(/\r/g, '').trimEnd();
+      if (!cleaned) {
+        return;
+      }
+      const buffer = stream === 'stdout' ? godotProcess.output : godotProcess.errors;
+      buffer.push(cleaned);
+      if (buffer.length > OUTPUT_BUFFER_LIMIT) {
+        buffer.shift();
+        if (stream === 'stdout') {
+          godotProcess.droppedOutputLines++;
+        } else {
+          godotProcess.droppedErrorLines++;
+        }
+      }
+      this.logDebug(`[Godot ${stream}] ${cleaned}`);
+    };
+    const stdoutLines = this.lineSplitter(keepLine('stdout'));
+    const stderrLines = this.lineSplitter(keepLine('stderr'));
+    childProcess.stdout?.on('data', stdoutLines.push);
+    childProcess.stderr?.on('data', stderrLines.push);
 
-    childProcess.stderr?.on('data', (data: Buffer) => {
-      const lines = data.toString().split('\n');
-      errors.push(...lines);
-      lines.forEach((line: string) => {
-        if (line.trim()) this.logDebug(`[Godot stderr] ${line}`);
-      });
-    });
-
-    childProcess.on('exit', (code: number | null) => {
+    childProcess.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
       this.logDebug(`Godot ${description} process exited with code ${code}`);
       if (godotProcess.timeout) {
         clearTimeout(godotProcess.timeout);
       }
-      if (this.activeProcess?.process === childProcess) {
-        this.activeProcess = null;
-      }
+      stdoutLines.flush();
+      stderrLines.flush();
+      godotProcess.isRunning = false;
+      godotProcess.exitedAt = new Date();
+      godotProcess.exitCode = code;
+      godotProcess.exitSignal = signal;
     });
 
     childProcess.on('error', (err: Error) => {
@@ -1314,26 +1439,28 @@ class GodotServer {
       if (godotProcess.timeout) {
         clearTimeout(godotProcess.timeout);
       }
-      if (this.activeProcess?.process === childProcess) {
-        this.activeProcess = null;
-      }
+      godotProcess.errors.push(`Process error: ${err.message}`);
+      godotProcess.isRunning = false;
+      godotProcess.exitedAt = new Date();
     });
 
-    if (timeoutMs !== undefined) {
+    if (options.timeoutMs !== undefined) {
       godotProcess.timeout = setTimeout(() => {
-        if (this.activeProcess?.process === childProcess) {
-          this.logDebug(`Stopping Godot ${description} process after ${timeoutMs} ms timeout`);
+        if (godotProcess.isRunning) {
+          this.logDebug(`Stopping Godot ${description} process after ${options.timeoutMs} ms timeout`);
+          godotProcess.stoppedByTimeout = true;
           childProcess.kill();
         }
-      }, timeoutMs);
+      }, options.timeoutMs);
     }
   }
 
   /**
-   * Stop the active Godot process and wait briefly for it to release resources.
+   * Stop the current Godot process and wait briefly for it to release resources.
+   * The record stays in currentProcess so callers can still read its output.
    */
-  private async stopActiveGodotProcess(): Promise<void> {
-    const godotProcess = this.activeProcess;
+  private async stopCurrentProcess(): Promise<void> {
+    const godotProcess = this.currentProcess;
     if (!godotProcess) {
       return;
     }
@@ -1373,21 +1500,42 @@ class GodotServer {
       });
     }
 
-    if (this.activeProcess === godotProcess) {
-      this.activeProcess = null;
+    if (childProcess.exitCode === null && childProcess.signalCode === null) {
+      this.logDebug(`Godot ${godotProcess.description} ignored SIGTERM, sending SIGKILL`);
+      childProcess.kill('SIGKILL');
     }
+  }
+
+  /**
+   * Describe a process record for get_debug_output and stop_project.
+   */
+  private describeProcess(godotProcess: GodotProcess) {
+    return {
+      running: godotProcess.isRunning,
+      target: godotProcess.description,
+      projectPath: godotProcess.projectPath,
+      scene: godotProcess.scene,
+      args: godotProcess.args,
+      startedAt: godotProcess.startedAt.toISOString(),
+      exitedAt: godotProcess.exitedAt?.toISOString(),
+      exitCode: godotProcess.exitCode,
+      exitSignal: godotProcess.exitSignal,
+      stoppedByTimeout: godotProcess.stoppedByTimeout,
+      droppedOutputLines: godotProcess.droppedOutputLines || undefined,
+      droppedErrorLines: godotProcess.droppedErrorLines || undefined,
+    };
   }
 
   /**
    * Handle the get_debug_output tool
    */
   private async handleGetDebugOutput() {
-    if (!this.activeProcess) {
+    if (!this.currentProcess) {
       return this.createErrorResponse(
         'No active Godot process.',
         [
           'Use run_project or run_scene to start a Godot process first',
-          'Check if the Godot process crashed unexpectedly',
+          'stop_project clears the output of the process it stopped',
         ]
       );
     }
@@ -1398,8 +1546,9 @@ class GodotServer {
           type: 'text',
           text: JSON.stringify(
             {
-              output: this.activeProcess.output,
-              errors: this.activeProcess.errors,
+              ...this.describeProcess(this.currentProcess),
+              output: this.currentProcess.output,
+              errors: this.currentProcess.errors,
             },
             null,
             2
@@ -1413,7 +1562,8 @@ class GodotServer {
    * Handle the stop_project tool
    */
   private async handleStopProject() {
-    if (!this.activeProcess) {
+    const godotProcess = this.currentProcess;
+    if (!godotProcess) {
       return this.createErrorResponse(
         'No active Godot process to stop.',
         [
@@ -1423,10 +1573,12 @@ class GodotServer {
       );
     }
 
-    this.logDebug('Stopping active Godot process');
-    const output = this.activeProcess.output;
-    const errors = this.activeProcess.errors;
-    await this.stopActiveGodotProcess();
+    const wasRunning = godotProcess.isRunning;
+    if (wasRunning) {
+      this.logDebug('Stopping running Godot process');
+      await this.stopCurrentProcess();
+    }
+    this.currentProcess = null;
 
     return {
       content: [
@@ -1434,9 +1586,10 @@ class GodotServer {
           type: 'text',
           text: JSON.stringify(
             {
-              message: 'Godot project stopped',
-              finalOutput: output,
-              finalErrors: errors,
+              message: wasRunning ? 'Godot project stopped' : 'Godot process had already exited',
+              ...this.describeProcess(godotProcess),
+              finalOutput: godotProcess.output,
+              finalErrors: godotProcess.errors,
             },
             null,
             2

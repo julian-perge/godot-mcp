@@ -88,16 +88,22 @@ Use `run_scene` for an F6-style run of one scene while keeping output compatible
 | Parameter | Required | Description |
 | --- | --- | --- |
 | `projectPath` | Yes | Path to the directory containing `project.godot` |
-| `scenePath` | Yes | A `res://` path or path relative to the project; `.tscn` and `.scn` are supported |
-| `timeoutMs` | No | Stops the scene automatically after this many milliseconds; defaults to `30000` |
+| `scenePath` | Yes | A `res://` path or path relative to the project. `.tscn` and `.scn` are supported |
+| `timeoutMs` | No | Stops the scene automatically after this many milliseconds. Defaults to `30000` |
+| `args` | No | Arguments for the game, passed after `--` so the game reads them with `OS.get_cmdline_user_args()` |
 
 ```json
 {
   "projectPath": "/path/to/project",
-  "scenePath": "res://tests/smoke_test.tscn",
-  "timeoutMs": 30000
+  "scenePath": "res://scenes/battle_scene.tscn",
+  "timeoutMs": 30000,
+  "args": ["--battle=1009"]
 }
 ```
+
+`run_project` takes the same `args`. Only one Godot process runs at a time, so starting a run stops the previous one. `get_debug_output` keeps working after the process exits, crashes or times out, and reports `running`, `exitCode` and `stoppedByTimeout` next to the last 1000 lines of stdout and stderr. `stop_project` returns the final output and clears it.
+
+Both tools pass `-d`, which turns on Godot's local debugger. A runtime script error pauses the game at a `debug>` prompt, and the error shows up in `get_debug_output`. Call `stop_project` to end it.
 
 ## Requirements
 
