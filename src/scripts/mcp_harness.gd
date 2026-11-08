@@ -39,6 +39,8 @@ const DRAG_STEPS := 10
 const DRAG_STEP_SEC := 0.01
 const DEFAULT_DURATION_MS := 100
 const DEFAULT_TEXT_DELAY_MS := 50
+const FRAME_WAIT_MSEC := 3000
+const NO_FRAME_ERROR := "the game window drew no frame, so it is probably hidden, minimized or covered"
 
 
 class Client:
@@ -107,6 +109,10 @@ func _poll_client(client: Client) -> void:
 	if status != StreamPeerTCP.STATUS_CONNECTED:
 		if status != StreamPeerTCP.STATUS_CONNECTING:
 			_clients.erase(client)
+			# The server has stopped waiting for this request, so a command that
+			# is still running must not hold up the next one.
+			if _active == client:
+				_active = null
 		return
 	if _active != null:
 		return
@@ -164,7 +170,7 @@ func _run_commands(client: Client, commands: Array, warp: bool) -> Dictionary:
 		if typeof(command) != TYPE_DICTIONARY:
 			result = {"error": "each command must be a JSON object"}
 		else:
-			result = await _run_command(command, warp)
+			result = await _run_command(client, command, warp)
 			result["type"] = str(command.get("type", ""))
 		results.append(result)
 		if result.has("error"):
@@ -172,7 +178,7 @@ func _run_commands(client: Client, commands: Array, warp: bool) -> Dictionary:
 	return {"ok": true, "results": results}
 
 
-func _run_command(command: Dictionary, warp: bool) -> Dictionary:
+func _run_command(client: Client, command: Dictionary, warp: bool) -> Dictionary:
 	match str(command.get("type", "")):
 		"screenshot":
 			return await _screenshot()
@@ -189,7 +195,7 @@ func _run_command(command: Dictionary, warp: bool) -> Dictionary:
 		"action_pulse":
 			return await _action_pulse(command)
 		"text":
-			return await _text(command)
+			return await _text(client, command)
 		"wait":
 			return await _wait(command)
 		var other:
@@ -200,8 +206,12 @@ func _screenshot() -> Dictionary:
 	# The headless display server never draws a frame, so waiting for one would hang.
 	if DisplayServer.get_name() == "headless":
 		return {"error": "the game runs headless, so it draws nothing to capture"}
-	# The texture is only complete once the frame has been drawn.
-	await RenderingServer.frame_post_draw
+	# Godot stops drawing a window that is minimized or fully covered, and the
+	# window reports that, so the request can fail at once.
+	if not DisplayServer.window_can_draw():
+		return {"error": NO_FRAME_ERROR}
+	if not await _wait_for_drawn_frame():
+		return {"error": NO_FRAME_ERROR}
 	var image := root.get_texture().get_image()
 	if image == null or image.is_empty():
 		return {"error": "the viewport returned no image"}
@@ -216,6 +226,20 @@ func _screenshot() -> Dictionary:
 		"height": image.get_height(),
 		"png_base64": Marshalls.raw_to_base64(image.save_png_to_buffer()),
 	}
+
+
+# Waits for the next drawn frame, because the viewport texture is only complete
+# once a frame has been drawn, and returns false if none comes before the
+# deadline. Awaiting frame_post_draw would never return when drawing is skipped,
+# but process frames keep running then, so this loop always reaches the deadline.
+func _wait_for_drawn_frame() -> bool:
+	var frames_drawn := Engine.get_frames_drawn()
+	var deadline := Time.get_ticks_msec() + FRAME_WAIT_MSEC
+	while Engine.get_frames_drawn() == frames_drawn:
+		if Time.get_ticks_msec() >= deadline:
+			return false
+		await process_frame
+	return true
 
 
 func _click(command: Dictionary, warp: bool) -> Dictionary:
@@ -316,7 +340,7 @@ func _action_pulse(command: Dictionary) -> Dictionary:
 	return {}
 
 
-func _text(command: Dictionary) -> Dictionary:
+func _text(client: Client, command: Dictionary) -> Dictionary:
 	var text = command.get("text")
 	if typeof(text) != TYPE_STRING:
 		return {"error": "text needs a string text"}
@@ -324,6 +348,10 @@ func _text(command: Dictionary) -> Dictionary:
 	if delay is Dictionary:
 		return delay
 	for character in text:
+		# A dropped request has already handed the game to the next one, so the
+		# rest of its text must not be typed into that one.
+		if _active != client:
+			return {"error": "the server closed the connection"}
 		var key := _character_key(character)
 		var code: int = character.unicode_at(0)
 		var event := InputEventKey.new()

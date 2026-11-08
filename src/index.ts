@@ -828,7 +828,7 @@ class GodotServer {
         },
         {
           name: 'capture_screenshot',
-          description: 'Capture a PNG of what the game started by run_project or run_scene is rendering right now, returned as an image. The image is in the game\'s viewport coordinates, the ones node positions use, so with stretch mode canvas_items or viewport it has the project\'s base size whatever the window size. Fails for a headless game, and times out while a script error holds the game at a "debug>" prompt.',
+          description: 'Capture a PNG of what the game started by run_project or run_scene is rendering right now, returned as an image. The image is in the game\'s viewport coordinates, the ones node positions use, so with stretch mode canvas_items or viewport it has the project\'s base size whatever the window size. Fails for a headless game or a window that is minimized, hidden or covered, and times out while a script error holds the game at a "debug>" prompt.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -2002,7 +2002,10 @@ class GodotServer {
       if (!response.ok || !shot?.png_base64) {
         return this.createErrorResponse(
           `Screenshot failed: ${shot?.error ?? response.error ?? 'no image in the answer'}`,
-          ['A game that runs headless draws nothing, so a screenshot needs a windowed run']
+          [
+            'A game that runs headless draws nothing, so a screenshot needs a windowed run',
+            'A minimized, hidden or covered window draws nothing either, so bring the game window to the front and try again',
+          ]
         );
       }
 

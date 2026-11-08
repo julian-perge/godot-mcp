@@ -120,7 +120,7 @@ The harness listens on `127.0.0.1` only, on a free port the server picks for eac
 
 Pass `harness: false` to `run_project` or `run_scene` for a project that sets its own main loop type, since `-s` takes its place. `capture_screenshot` and `simulate_input` then refuse to run.
 
-A game that runs headless draws nothing, so the call fails. While a script error holds the game at the `debug>` prompt, the call times out after 15 seconds.
+A game that runs headless draws nothing, so the call fails. Godot also stops drawing a window that is minimized, hidden or covered, so the call fails within 3 seconds and names that as the likely cause. While a script error holds the game at the `debug>` prompt, the call times out after 15 seconds.
 
 ### Simulate Input
 
@@ -149,7 +149,7 @@ A game that runs headless draws nothing, so the call fails. While a script error
 }
 ```
 
-Events go through `Input.parse_input_event()`, so the game gets them like real input. GUI controls react, actions bound to a key fire, and `_input` and `_unhandled_input` receive them. The `action` commands send `InputEventAction` events. The sequence stops at the first command that fails and says which one. `timeoutMs` (default `30000`) covers the whole sequence, and when it runs out the harness drops the remaining commands instead of sending them late.
+Events go through `Input.parse_input_event()`, so the game gets them like real input. GUI controls react, actions bound to a key fire, and `_input` and `_unhandled_input` receive them. The `action` commands send `InputEventAction` events. The sequence stops at the first command that fails and says which one. `timeoutMs` (default `30000`) covers the whole sequence, and when it runs out the harness drops the remaining commands instead of sending them late, and the next request can run.
 
 The real mouse cursor stays put unless you pass `warpMouse: true`. Clicks, drags and GUI hover work without it, but `get_global_mouse_position()` and `get_mouse_position()` read the real cursor, so a game that aims or hovers with those needs it. Warping moves the cursor on your desktop.
 
