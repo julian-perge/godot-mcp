@@ -106,6 +106,8 @@ class GodotServer {
   private operationsScriptPath: string;
   private validatedPaths: Map<string, boolean> = new Map();
   private strictPathValidation: boolean = false;
+  // Last lines the editor started by launch_editor printed, cleared on each launch
+  private editorLogLines: string[] = [];
 
   /**
    * Parameter name mappings between snake_case and camelCase
@@ -127,6 +129,7 @@ class GodotServer {
     'directory': 'directory',
     'recursive': 'recursive',
     'scene': 'scene',
+    'line_count': 'lineCount',
   };
 
   /**
@@ -1000,6 +1003,19 @@ class GodotServer {
             required: ['projectPath'],
           },
         },
+        {
+          name: 'view_log',
+          description: 'View recent console output from the editor started by launch_editor, such as script parse errors. Returns the last N lines of captured stdout and stderr. For run_project and run_scene output use get_debug_output.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              lineCount: {
+                type: 'number',
+                description: 'Number of trailing lines to return (default 50, max 1000)',
+              },
+            },
+          },
+        },
       ],
     }));
 
@@ -1037,6 +1053,8 @@ class GodotServer {
           return await this.handleGetUid(request.params.arguments);
         case 'update_project_uids':
           return await this.handleUpdateProjectUids(request.params.arguments);
+        case 'view_log':
+          return await this.handleViewLog(request.params.arguments);
         default:
           throw new McpError(
             ErrorCode.MethodNotFound,
@@ -1096,19 +1114,43 @@ class GodotServer {
       }
 
       this.logDebug(`Launching Godot editor for project: ${args.projectPath}`);
+
+      // Clear the log buffer on each new launch
+      this.editorLogLines = [];
+
       const process = spawn(this.godotPath, ['-e', '--path', args.projectPath], {
         stdio: 'pipe',
       });
 
+      const keepEditorLine = (stream: 'stdout' | 'stderr') => (line: string) => {
+        const cleaned = line.replace(/\r/g, '').trimEnd();
+        if (!cleaned) {
+          return;
+        }
+        this.editorLogLines.push(`[${stream}] ${cleaned}`);
+        if (this.editorLogLines.length > OUTPUT_BUFFER_LIMIT) {
+          this.editorLogLines.shift();
+        }
+      };
+      const stdoutLines = this.lineSplitter(keepEditorLine('stdout'));
+      const stderrLines = this.lineSplitter(keepEditorLine('stderr'));
+      process.stdout?.on('data', stdoutLines.push);
+      process.stderr?.on('data', stderrLines.push);
+      process.on('exit', () => {
+        stdoutLines.flush();
+        stderrLines.flush();
+      });
+
       process.on('error', (err: Error) => {
         console.error('Failed to start Godot editor:', err);
+        this.editorLogLines.push(`[spawn error] ${err.message}`);
       });
 
       return {
         content: [
           {
             type: 'text',
-            text: `Godot editor launched successfully for project at ${args.projectPath}.`,
+            text: `Godot editor launched for project at ${args.projectPath}. Use view_log to check the console output.`,
           },
         ],
       };
@@ -2452,6 +2494,29 @@ class GodotServer {
         ]
       );
     }
+  }
+
+  /**
+   * Handle the view_log tool
+   */
+  private async handleViewLog(args: any) {
+    args = this.normalizeParameters(args || {});
+
+    let lineCount = 50; // default
+    if (args.lineCount !== undefined && typeof args.lineCount === 'number') {
+      lineCount = Math.max(1, Math.min(1000, Math.floor(args.lineCount)));
+    }
+
+    const lines = this.editorLogLines.slice(-lineCount);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: lines.length > 0 ? lines.join('\n') : '(no output captured yet)',
+        },
+      ],
+    };
   }
 
   /**
