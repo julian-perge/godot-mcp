@@ -94,6 +94,7 @@ Use `run_scene` for an F6-style run of one scene while keeping output compatible
 | `timeoutMs` | No | Stops the scene automatically after this many milliseconds. Defaults to `30000` |
 | `args` | No | Arguments for the game, passed after `--` so the game reads them with `OS.get_cmdline_user_args()` |
 | `harness` | No | Run the game under the harness main loop that `capture_screenshot` and `simulate_input` need. Defaults to `true` |
+| `embedded` | No | macOS only. Run the game with no window, so it leaves your mouse and keyboard alone. Defaults to `false`. See [Run Without a Window](#run-without-a-window) |
 
 ```json
 {
@@ -151,7 +152,15 @@ A game that runs headless draws nothing, so the call fails. Godot also stops dra
 
 Events go through `Input.parse_input_event()`, so the game gets them like real input. GUI controls react, actions bound to a key fire, and `_input` and `_unhandled_input` receive them. The `action` commands send `InputEventAction` events. The sequence stops at the first command that fails and says which one. `timeoutMs` (default `30000`) covers the whole sequence, and when it runs out the harness drops the remaining commands instead of sending them late, and the next request can run.
 
-The real mouse cursor stays put unless you pass `warpMouse: true`. Clicks, drags and GUI hover work without it, but `get_global_mouse_position()` and `get_mouse_position()` read the real cursor, so a game that aims or hovers with those needs it. Warping moves the cursor on your desktop.
+The real mouse cursor stays put unless you pass `warpMouse: true`. Clicks, drags and GUI hover work without it, but `get_global_mouse_position()` and `get_mouse_position()` read the real cursor, so a game that aims or hovers with those needs it. Warping moves the cursor on your desktop. A game started with `embedded: true` follows the injected position in those calls and needs no warp.
+
+### Run Without a Window
+
+Pass `embedded: true` to `run_project` or `run_scene` on macOS to drive a game without it touching your mouse, keyboard or focus. Godot starts in `--embedded` mode, the one the editor's game view uses, so there is no window and no Dock icon and the game never takes focus.
+
+`capture_screenshot` and `simulate_input` work as usual, and frames keep rendering with nothing on screen, so a covered window is not a problem. `get_global_mouse_position()` and `get_mouse_position()` follow injected motion instead of the real cursor, and `warpMouse` no longer moves your cursor.
+
+The mode is undocumented and can change with an engine upgrade, and it needs the harness. The window size cannot change, so the game keeps its project's window size.
 
 ### Run GUT Tests
 

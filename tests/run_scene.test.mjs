@@ -20,6 +20,19 @@ function getText(result) {
   return textContent.text;
 }
 
+function connectClient() {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [path.join(repositoryPath, 'build', 'index.js')],
+    env: { ...process.env, GODOT_PATH: godotPath },
+  });
+  const client = new Client(
+    { name: 'run-scene-integration-test', version: '1.0.0' },
+    { capabilities: {} }
+  );
+  return { client, transport };
+}
+
 async function waitForDebugOutput(client, marker) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -37,15 +50,7 @@ test('run_scene integrates with process and debug tools', {
   skip: skipReason,
   timeout: 60000,
 }, async () => {
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [path.join(repositoryPath, 'build', 'index.js')],
-    env: { ...process.env, GODOT_PATH: godotPath },
-  });
-  const client = new Client(
-    { name: 'run-scene-integration-test', version: '1.0.0' },
-    { capabilities: {} }
-  );
+  const { client, transport } = connectClient();
 
   try {
     await client.connect(transport);
@@ -125,6 +130,39 @@ test('run_scene integrates with process and debug tools', {
     assert.match(getText(stoppedAfterExit), /already exited/);
     const afterStop = await client.callTool({ name: 'get_debug_output', arguments: {} });
     assert.match(getText(afterStop), /No active Godot process/);
+  } finally {
+    try {
+      await client.callTool({ name: 'stop_project', arguments: {} });
+    } catch {
+      // The process may already be stopped or the transport may already be closed.
+    }
+    await client.close();
+  }
+});
+
+test('run_scene with embedded runs a game with no window', {
+  skip: skipReason || (process.platform !== 'darwin' ? 'embedded only works on macOS' : false),
+  timeout: 60000,
+}, async () => {
+  const { client, transport } = connectClient();
+  const scene = { projectPath: fixturePath, scenePath: 'res://tests/smoke_test.tscn' };
+
+  try {
+    await client.connect(transport);
+
+    const invalidEmbedded = await client.callTool({ name: 'run_scene', arguments: { ...scene, embedded: 'yes' } });
+    assert.match(getText(invalidEmbedded), /embedded must be true or false/);
+
+    const withoutHarness = await client.callTool({ name: 'run_scene', arguments: { ...scene, embedded: true, harness: false } });
+    assert.match(getText(withoutHarness), /embedded needs the harness/);
+
+    const started = await client.callTool({ name: 'run_scene', arguments: { ...scene, embedded: true } });
+    assert.match(getText(started), /no window/);
+    await waitForDebugOutput(client, 'RUN_SCENE_DISPLAY embedded');
+    await waitForDebugOutput(client, 'listening on');
+
+    const screenshot = await client.callTool({ name: 'capture_screenshot', arguments: {} });
+    assert.ok(screenshot.content.some((item) => item.type === 'image'), getText(screenshot));
   } finally {
     try {
       await client.callTool({ name: 'stop_project', arguments: {} });

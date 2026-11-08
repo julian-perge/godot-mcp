@@ -34,6 +34,7 @@ const OUTPUT_BUFFER_LIMIT = 1000; // Max lines to keep per stream
 const DEFAULT_GUT_TIMEOUT_MS = 600000;
 const GUT_OUTPUT_LIMIT_CHARS = 200000; // Tail of GUT stdout returned to the client
 const DEFAULT_INPUT_TIMEOUT_MS = 30000;
+const NO_WINDOW_NOTE = ' The game has no window, so use capture_screenshot to see it.';
 
 const execFileAsync = promisify(execFile);
 
@@ -84,6 +85,7 @@ interface StartProcessOptions {
   scene?: string;
   args: string[];
   harness: boolean;
+  embedded: boolean;
   timeoutMs?: number;
 }
 
@@ -789,6 +791,10 @@ class GodotServer {
                 type: 'boolean',
                 description: 'Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.',
               },
+              embedded: {
+                type: 'boolean',
+                description: 'Optional: macOS only (default: false). Run the game with no window, through Godot\'s undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness.',
+              },
             },
             required: ['projectPath'],
           },
@@ -821,6 +827,10 @@ class GodotServer {
               harness: {
                 type: 'boolean',
                 description: 'Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.',
+              },
+              embedded: {
+                type: 'boolean',
+                description: 'Optional: macOS only (default: false). Run the game with no window, through Godot\'s undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness.',
               },
             },
             required: ['projectPath', 'scenePath'],
@@ -1425,6 +1435,11 @@ class GodotServer {
         );
       }
 
+      const embeddedProblem = this.embeddedOptionProblem(args.embedded, args.harness);
+      if (embeddedProblem) {
+        return this.createErrorResponse(embeddedProblem, ['Omit embedded to run the game in a normal window']);
+      }
+
       const scene = args.scene && this.validatePath(args.scene) ? args.scene : undefined;
       if (scene) {
         this.logDebug(`Adding scene parameter: ${scene}`);
@@ -1436,13 +1451,14 @@ class GodotServer {
         scene,
         args: userArgs,
         harness: args.harness !== false,
+        embedded: args.embedded === true,
       });
 
       return {
         content: [
           {
             type: 'text',
-            text: `Godot project started in debug mode. Use get_debug_output to see output.`,
+            text: `Godot project started in debug mode. Use get_debug_output to see output.${args.embedded === true ? NO_WINDOW_NOTE : ''}`,
           },
         ],
       };
@@ -1532,6 +1548,11 @@ class GodotServer {
       );
     }
 
+    const embeddedProblem = this.embeddedOptionProblem(rawArgs.embedded, rawArgs.harness);
+    if (embeddedProblem) {
+      return this.createErrorResponse(embeddedProblem, ['Omit embedded to run the game in a normal window']);
+    }
+
     try {
       const projectFile = join(projectPath, 'project.godot');
       if (!existsSync(projectFile)) {
@@ -1563,6 +1584,7 @@ class GodotServer {
         scene: godotScenePath,
         args: userArgs,
         harness: rawArgs.harness !== false,
+        embedded: rawArgs.embedded === true,
         timeoutMs,
       });
 
@@ -1570,7 +1592,7 @@ class GodotServer {
         content: [
           {
             type: 'text',
-            text: `Godot scene ${scenePath} started in debug mode. Use get_debug_output to see output or stop_project to stop it. The scene will stop automatically after ${timeoutMs} ms.`,
+            text: `Godot scene ${scenePath} started in debug mode. Use get_debug_output to see output or stop_project to stop it. The scene will stop automatically after ${timeoutMs} ms.${rawArgs.embedded === true ? NO_WINDOW_NOTE : ''}`,
           },
         ],
       };
@@ -1600,6 +1622,26 @@ class GodotServer {
       return null;
     }
     return value[0] === '--' ? value.slice(1) : [...value];
+  }
+
+  /**
+   * Check the optional embedded parameter of run_project and run_scene.
+   * Returns why it is refused, or null when it is fine.
+   */
+  private embeddedOptionProblem(embedded: unknown, harness: unknown): string | null {
+    if (embedded === undefined) {
+      return null;
+    }
+    if (typeof embedded !== 'boolean') {
+      return 'embedded must be true or false';
+    }
+    if (embedded && process.platform !== 'darwin') {
+      return 'embedded only works on macOS';
+    }
+    if (embedded && harness === false) {
+      return 'embedded needs the harness, because without it nothing can see or click the game';
+    }
+    return null;
   }
 
   /**
@@ -1639,6 +1681,11 @@ class GodotServer {
 
     // Godot hands everything after "--" to the game, so the game's args go last.
     const spawnArgs = ['-d', '--path', options.projectPath];
+    // Godot's embedded display server sends debugger messages while it starts,
+    // so this mode relies on the -d above.
+    if (options.embedded) {
+      spawnArgs.push('--embedded');
+    }
     const env = { ...process.env };
     let harness: GodotProcess['harness'];
     if (options.harness) {
