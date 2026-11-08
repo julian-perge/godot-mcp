@@ -120,6 +120,24 @@ func get_script_by_name(name_of_class):
     printerr("Could not find script for class: " + name_of_class)
     return null
 
+# Return an error message when a res:// property value is not safe to load, or
+# an empty string when it is. Loading a script runs its static initializers and
+# assigning it to a node runs _init(), so script paths must name a class_name
+# script from the global class registry, the same allowlist get_script_by_name
+# uses. Paths with ".." segments are refused because res://../ resolves outside
+# the project.
+func check_property_resource_path(property, path):
+    var relative_path = path.trim_prefix("res://").replace("\\", "/")
+    if ".." in relative_path.split("/"):
+        return "Failed to set property '" + str(property) + "': path leaves the project: " + path
+    var extension = path.get_extension().to_lower()
+    if property == "script" or extension in ["gd", "gdc", "cs"]:
+        for global_class in ProjectSettings.get_global_class_list():
+            if global_class["path"] == path:
+                return ""
+        return "Failed to set property '" + str(property) + "': only scripts registered with class_name can be assigned: " + path
+    return ""
+
 # Instantiate a class by name
 func instantiate_class(name_of_class):
     if name_of_class.is_empty():
@@ -519,6 +537,11 @@ func add_node(params):
                 print("Setting property: " + property + " = " + str(properties[property]))
             var value = properties[property]
             if typeof(value) == TYPE_STRING and value.begins_with("res://"):
+                var path_error = check_property_resource_path(property, value)
+                if not path_error.is_empty():
+                    printerr(path_error)
+                    quit(1)
+                    return
                 value = load(value)
                 if debug_mode:
                     print("Loaded resource for property: " + property + " -> " + str(value))

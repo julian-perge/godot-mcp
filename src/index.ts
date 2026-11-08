@@ -1632,6 +1632,14 @@ class GodotServer {
       }
 
       if (args.properties) {
+        for (const [key, value] of Object.entries(args.properties)) {
+          if (typeof value === 'string' && value.startsWith('res://') && !this.validatePath(value)) {
+            return this.createErrorResponse(
+              `Invalid resource path for property '${key}'`,
+              ['Use a res:// path inside the project without ".."']
+            );
+          }
+        }
         params.properties = args.properties;
       }
 
