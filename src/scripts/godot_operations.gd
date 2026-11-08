@@ -263,10 +263,7 @@ func create_scene(params):
     scene_root.name = "root"
     if debug_mode:
         print("Root node created with name: " + scene_root.name)
-    
-    # Set the owner of the root node to itself (important for scene saving)
-    scene_root.owner = scene_root
-    
+
     # Pack the scene
     var packed_scene = PackedScene.new()
     var result = packed_scene.pack(scene_root)
