@@ -183,7 +183,7 @@ With neither `test` nor `dir`, GUT runs what `.gutconfig.json` lists. One run ha
 ## Requirements
 
 - [Godot Engine](https://godotengine.org/download) installed on your system
-- Node.js (>=18.0.0) and npm
+- [Bun](https://bun.sh) 1.x
 - An AI agent that supports MCP
 
 ## Quick Start
@@ -191,7 +191,7 @@ With neither `test` nor `dir`, GUT runs what `.gutconfig.json` lists. One run ha
 ### Claude Code
 
 ```bash
-claude mcp add godot -- npx @coding-solo/godot-mcp
+claude mcp add godot -- bunx @coding-solo/godot-mcp
 ```
 
 That's it. Restart Claude Code and your Godot MCP tools are available.
@@ -199,7 +199,7 @@ That's it. Restart Claude Code and your Godot MCP tools are available.
 With environment variables:
 
 ```bash
-claude mcp add godot -e GODOT_PATH=/path/to/godot -e DEBUG=true -- npx @coding-solo/godot-mcp
+claude mcp add godot -e GODOT_PATH=/path/to/godot -e DEBUG=true -- bunx @coding-solo/godot-mcp
 ```
 
 <details>
@@ -211,7 +211,7 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
 {
   "mcpServers": {
     "godot": {
-      "command": "npx",
+      "command": "bunx",
       "args": ["@coding-solo/godot-mcp"],
       "env": {
         "DEBUG": "true"
@@ -254,7 +254,7 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
 3. Fill out the form:
    - Name: `godot`
    - Type: `command`
-   - Command: `npx @coding-solo/godot-mcp`
+   - Command: `bunx @coding-solo/godot-mcp`
 4. Click "Add"
 5. You may need to press the refresh button in the top right corner of the MCP server card to populate the tool list
 
@@ -266,7 +266,7 @@ Create a file at `.cursor/mcp.json` in your project directory:
 {
   "mcpServers": {
     "godot": {
-      "command": "npx",
+      "command": "bunx",
       "args": ["@coding-solo/godot-mcp"],
       "env": {
         "DEBUG": "true"
@@ -287,7 +287,7 @@ For any MCP-compatible client, use this configuration:
 {
   "mcpServers": {
     "godot": {
-      "command": "npx",
+      "command": "bunx",
       "args": ["@coding-solo/godot-mcp"],
       "env": {
         "GODOT_PATH": "/path/to/godot",
@@ -313,11 +313,11 @@ For any MCP-compatible client, use this configuration:
 ```bash
 git clone https://github.com/Coding-Solo/godot-mcp.git
 cd godot-mcp
-npm install
-npm run build
+bun install
+bun run build
 ```
 
-Then point your MCP client to `build/index.js` instead of using `npx`.
+Then point your MCP client at `bun /path/to/godot-mcp/build/index.js` instead of `bunx`, for example `claude mcp add godot -- bun /path/to/godot-mcp/build/index.js`. `bun run test` runs the tests, and the `run_scene` test only runs when `GODOT_PATH` is set.
 
 </details>
 
@@ -337,7 +337,7 @@ The bundled script accepts operation type and parameters as JSON, allowing for f
 - **Godot Not Found**: Set the `GODOT_PATH` environment variable to your Godot executable path
 - **Connection Issues**: Ensure the server is running and restart your AI assistant
 - **Invalid Project Path**: Ensure the path points to a directory containing a `project.godot` file
-- **Build Issues**: Make sure all dependencies are installed by running `npm install`
+- **Build Issues**: Make sure all dependencies are installed by running `bun install`
 - **`load_sprite` fails with `No loader found for resource`**:
   - Verify the image file is not corrupt
   - Make sure the format is supported by your Godot import pipeline

@@ -38,9 +38,10 @@ By participating in this project, you agree to maintain a respectful and inclusi
 ### Setting Up the Development Environment
 
 1. Clone the repository
-2. Install dependencies with `npm install`
-3. Build the project with `npm run build`
-4. For development with auto-rebuild, use `npm run watch`
+2. Install dependencies with `bun install`
+3. Build the project with `bun run build`
+4. For development with auto-rebuild, use `bun run watch`
+5. Run the tests with `bun run test`. Set `GODOT_PATH` to include the tests that start Godot
 
 ### Project Structure
 
@@ -74,7 +75,7 @@ For debugging the MCP server:
 1. Set the `DEBUG` environment variable to `true`
 2. Use the MCP Inspector for interactive debugging:
    ```bash
-   npm run inspector
+   bun run inspector
    ```
 3. Check the logs for detailed information about what's happening
 

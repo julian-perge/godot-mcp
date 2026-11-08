@@ -27,10 +27,10 @@
     "build"
   ],
   "scripts": {
-    "build": "tsc && node scripts/build.js",
-    "test": "npm run build && node --test tests/",
-    "inspector": "npx @modelcontextprotocol/inspector build/index.js",
-    "prepare": "npm run build",
+    "build": "tsc && bun scripts/build.js",
+    "test": "bun run build && bun test tests/",
+    "inspector": "bunx @modelcontextprotocol/inspector bun build/index.js",
+    "prepare": "bun run build",
     "watch": "tsc --watch"
   },
   "dependencies": {
