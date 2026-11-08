@@ -33,6 +33,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /**
+ * Resolve a Godot resource path (e.g. "res://scenes/Main.tscn") to an
+ * absolute path inside the project directory. Falls back to a plain join
+ * when the path has no res:// prefix.
+ */
+function resolveResourcePath(projectPath: string, resourcePath: string): string {
+  return join(projectPath, resourcePath.replace(/^res:\/\//, ''));
+}
+
+/**
  * Interface representing a running Godot process
  */
 interface GodotProcess {
@@ -1599,7 +1608,7 @@ class GodotServer {
       }
 
       // Check if the scene file exists
-      const scenePath = join(args.projectPath, args.scenePath);
+      const scenePath = resolveResourcePath(args.projectPath, args.scenePath);
       if (!existsSync(scenePath)) {
         return this.createErrorResponse(
           `Scene file does not exist: ${args.scenePath}`,
@@ -1700,7 +1709,7 @@ class GodotServer {
       }
 
       // Check if the scene file exists
-      const scenePath = join(args.projectPath, args.scenePath);
+      const scenePath = resolveResourcePath(args.projectPath, args.scenePath);
       if (!existsSync(scenePath)) {
         return this.createErrorResponse(
           `Scene file does not exist: ${args.scenePath}`,
@@ -1712,7 +1721,7 @@ class GodotServer {
       }
 
       // Check if the texture file exists
-      const texturePath = join(args.projectPath, args.texturePath);
+      const texturePath = resolveResourcePath(args.projectPath, args.texturePath);
       if (!existsSync(texturePath)) {
         return this.createErrorResponse(
           `Texture file does not exist: ${args.texturePath}`,
@@ -1803,7 +1812,7 @@ class GodotServer {
       }
 
       // Check if the scene file exists
-      const scenePath = join(args.projectPath, args.scenePath);
+      const scenePath = resolveResourcePath(args.projectPath, args.scenePath);
       if (!existsSync(scenePath)) {
         return this.createErrorResponse(
           `Scene file does not exist: ${args.scenePath}`,
@@ -1902,7 +1911,7 @@ class GodotServer {
       }
 
       // Check if the scene file exists
-      const scenePath = join(args.projectPath, args.scenePath);
+      const scenePath = resolveResourcePath(args.projectPath, args.scenePath);
       if (!existsSync(scenePath)) {
         return this.createErrorResponse(
           `Scene file does not exist: ${args.scenePath}`,
@@ -2007,7 +2016,7 @@ class GodotServer {
       }
 
       // Check if the file exists
-      const filePath = join(args.projectPath, args.filePath);
+      const filePath = resolveResourcePath(args.projectPath, args.filePath);
       if (!existsSync(filePath)) {
         return this.createErrorResponse(
           `File does not exist: ${args.filePath}`,
