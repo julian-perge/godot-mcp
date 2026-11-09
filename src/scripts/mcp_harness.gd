@@ -221,11 +221,35 @@ func _screenshot() -> Dictionary:
 	var size := Vector2i(root.get_visible_rect().size.round())
 	if image.get_size() != size:
 		image.resize(size.x, size.y, Image.INTERPOLATE_LANCZOS)
+	# The Compatibility renderer accepts hdr_2d but keeps sRGB values in the
+	# viewport, so only the other renderers need converting.
+	if root.use_hdr_2d and RenderingServer.get_current_rendering_method() != "gl_compatibility":
+		image = _linear_to_srgb(image)
 	return {
 		"width": image.get_width(),
 		"height": image.get_height(),
 		"png_base64": Marshalls.raw_to_base64(image.save_png_to_buffer()),
 	}
+
+
+# Godot converts a linear viewport to sRGB only when it copies it to the window,
+# so a capture has to convert it too. Image.linear_to_srgb() only accepts 8-bit
+# images, which have already lost the dark values, and Image.set_pixel()
+# truncates, so each pixel is converted as a float and rounded into its bytes.
+func _linear_to_srgb(linear: Image) -> Image:
+	var width := linear.get_width()
+	var height := linear.get_height()
+	var bytes := PackedByteArray()
+	bytes.resize(width * height * 3)
+	var offset := 0
+	for y in height:
+		for x in width:
+			var pixel := linear.get_pixel(x, y).linear_to_srgb()
+			bytes[offset] = pixel.r8
+			bytes[offset + 1] = pixel.g8
+			bytes[offset + 2] = pixel.b8
+			offset += 3
+	return Image.create_from_data(width, height, false, Image.FORMAT_RGB8, bytes)
 
 
 # Waits for the next drawn frame, because the viewport texture is only complete
