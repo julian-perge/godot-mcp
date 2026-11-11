@@ -2,24 +2,24 @@
 extends SceneTree
 
 # Debug mode flag
-var debug_mode = false
+var debug_mode: bool = false
 
 func _init():
-    var args = OS.get_cmdline_args()
+    var args: PackedStringArray = OS.get_cmdline_args()
     
     # Check for debug flag
     debug_mode = "--debug-godot" in args
     
     # Find the script argument and determine the positions of operation and params
-    var script_index = args.find("--script")
+    var script_index: int = args.find("--script")
     if script_index == -1:
         log_error("Could not find --script argument")
         quit(1)
     
     # The operation should be 2 positions after the script path (script_index + 1 is the script path itself)
-    var operation_index = script_index + 2
+    var operation_index: int = script_index + 2
     # The params should be 3 positions after the script path
-    var params_index = script_index + 3
+    var params_index: int = script_index + 3
     
     if args.size() <= params_index:
         log_error("Usage: godot --headless --script godot_operations.gd <operation> <json_params>")
@@ -32,15 +32,15 @@ func _init():
     log_debug("Operation index: " + str(operation_index))
     log_debug("Params index: " + str(params_index))
     
-    var operation = args[operation_index]
-    var params_json = args[params_index]
+    var operation: String = args[operation_index]
+    var params_json: String = args[params_index]
     
     log_info("Operation: " + operation)
     log_debug("Params JSON: " + params_json)
     
     # Parse JSON using Godot 4.x API
-    var json = JSON.new()
-    var error = json.parse(params_json)
+    var json: JSON = JSON.new()
+    var error: int = json.parse(params_json)
     var params = null
     
     if error == OK:
@@ -97,7 +97,7 @@ func get_script_by_name(name_of_class):
         print("Attempting to get script for class: " + name_of_class)
 
     # Search for it in the global class registry if it's a class name
-    var global_classes = ProjectSettings.get_global_class_list()
+    var global_classes: Array[Dictionary] = ProjectSettings.get_global_class_list()
     if debug_mode:
         print("Searching through " + str(global_classes.size()) + " global classes")
     
@@ -108,7 +108,7 @@ func get_script_by_name(name_of_class):
         if found_name_of_class == name_of_class:
             if debug_mode:
                 print("Found matching class in registry: " + found_name_of_class + " at path: " + found_path)
-            var script = load(found_path) as Script
+            var script: Script = load(found_path) as Script
             if script:
                 if debug_mode:
                     print("Successfully loaded script from registry")
@@ -184,10 +184,10 @@ func create_scene(params):
     print("Creating scene: " + params.scene_path)
     
     # Get project paths and log them for debugging
-    var project_res_path = "res://"
-    var project_user_path = "user://"
-    var global_res_path = ProjectSettings.globalize_path(project_res_path)
-    var global_user_path = ProjectSettings.globalize_path(project_user_path)
+    var project_res_path: String = "res://"
+    var project_user_path: String = "user://"
+    var global_res_path: String = ProjectSettings.globalize_path(project_res_path)
+    var global_user_path: String = ProjectSettings.globalize_path(project_user_path)
     
     if debug_mode:
         print("Project paths:")
@@ -198,7 +198,7 @@ func create_scene(params):
         
         # Print some common environment variables for debugging
         print("Environment variables:")
-        var env_vars = ["PATH", "HOME", "USER", "TEMP", "GODOT_PATH"]
+        var env_vars: Array = ["PATH", "HOME", "USER", "TEMP", "GODOT_PATH"]
         for env_var in env_vars:
             if OS.has_environment(env_var):
                 print("  " + env_var + " = " + OS.get_environment(env_var))
@@ -211,13 +211,13 @@ func create_scene(params):
         print("Scene path (with res://): " + full_scene_path)
     
     # Convert resource path to an absolute path
-    var absolute_scene_path = ProjectSettings.globalize_path(full_scene_path)
+    var absolute_scene_path: String = ProjectSettings.globalize_path(full_scene_path)
     if debug_mode:
         print("Absolute scene path: " + absolute_scene_path)
     
     # Get the scene directory paths
     var scene_dir_res = full_scene_path.get_base_dir()
-    var scene_dir_abs = absolute_scene_path.get_base_dir()
+    var scene_dir_abs: String = absolute_scene_path.get_base_dir()
     if debug_mode:
         print("Scene directory (resource path): " + scene_dir_res)
         print("Scene directory (absolute path): " + scene_dir_abs)
@@ -225,28 +225,28 @@ func create_scene(params):
     # Only do extensive testing in debug mode
     if debug_mode:
         # Try to create a simple test file in the project root to verify write access
-        var initial_test_file_path = "res://godot_mcp_test_write.tmp"
-        var initial_test_file = FileAccess.open(initial_test_file_path, FileAccess.WRITE)
+        var initial_test_file_path: String = "res://godot_mcp_test_write.tmp"
+        var initial_test_file: FileAccess = FileAccess.open(initial_test_file_path, FileAccess.WRITE)
         if initial_test_file:
             initial_test_file.store_string("Test write access")
             initial_test_file.close()
             print("Successfully wrote test file to project root: " + initial_test_file_path)
             
             # Verify the test file exists
-            var initial_test_file_exists = FileAccess.file_exists(initial_test_file_path)
+            var initial_test_file_exists: bool = FileAccess.file_exists(initial_test_file_path)
             print("Test file exists check: " + str(initial_test_file_exists))
             
             # Clean up the test file
             if initial_test_file_exists:
-                var remove_error = DirAccess.remove_absolute(ProjectSettings.globalize_path(initial_test_file_path))
+                var remove_error: int = DirAccess.remove_absolute(ProjectSettings.globalize_path(initial_test_file_path))
                 print("Test file removal result: " + str(remove_error))
         else:
-            var write_error = FileAccess.get_open_error()
+            var write_error: int = FileAccess.get_open_error()
             printerr("Failed to write test file to project root: " + str(write_error))
             printerr("This indicates a serious permission issue with the project directory")
     
     # Use traditional if-else statement for better compatibility
-    var root_node_type = "Node2D"  # Default value
+    var root_node_type: String = "Node2D"  # Default value
     if params.has("root_node_type"):
         root_node_type = params.root_node_type
     if debug_mode:
@@ -265,8 +265,8 @@ func create_scene(params):
         print("Root node created with name: " + scene_root.name)
 
     # Pack the scene
-    var packed_scene = PackedScene.new()
-    var result = packed_scene.pack(scene_root)
+    var packed_scene: PackedScene = PackedScene.new()
+    var result: int = packed_scene.pack(scene_root)
     if debug_mode:
         print("Pack result: " + str(result) + " (OK=" + str(OK) + ")")
     
@@ -275,9 +275,9 @@ func create_scene(params):
         if debug_mode:
             # First, let's verify we can write to the project directory
             print("Testing write access to project directory...")
-            var test_write_path = "res://test_write_access.tmp"
-            var test_write_abs = ProjectSettings.globalize_path(test_write_path)
-            var test_file = FileAccess.open(test_write_path, FileAccess.WRITE)
+            var test_write_path: String = "res://test_write_access.tmp"
+            var test_write_abs: String = ProjectSettings.globalize_path(test_write_path)
+            var test_file: FileAccess = FileAccess.open(test_write_path, FileAccess.WRITE)
             
             if test_file:
                 test_file.store_string("Write test")
@@ -286,10 +286,10 @@ func create_scene(params):
                 
                 # Clean up test file
                 if FileAccess.file_exists(test_write_path):
-                    var remove_error = DirAccess.remove_absolute(test_write_abs)
+                    var remove_error: int = DirAccess.remove_absolute(test_write_abs)
                     print("Test file removal result: " + str(remove_error))
             else:
-                var write_error = FileAccess.get_open_error()
+                var write_error: int = FileAccess.get_open_error()
                 printerr("Failed to write test file to project directory: " + str(write_error))
                 printerr("This may indicate permission issues with the project directory")
                 # Continue anyway, as the scene directory might still be writable
@@ -306,7 +306,7 @@ func create_scene(params):
         # Create the directory if needed
         if not scene_dir_relative.is_empty():
             # First check if it exists
-            var dir_exists = DirAccess.dir_exists_absolute(scene_dir_abs)
+            var dir_exists: bool = DirAccess.dir_exists_absolute(scene_dir_abs)
             if debug_mode:
                 print("Directory exists check (absolute): " + str(dir_exists))
             
@@ -315,15 +315,15 @@ func create_scene(params):
                     print("Directory doesn't exist, creating: " + scene_dir_relative)
                 
                 # Try to create the directory using DirAccess
-                var dir = DirAccess.open("res://")
+                var dir: DirAccess = DirAccess.open("res://")
                 if dir == null:
-                    var open_error = DirAccess.get_open_error()
+                    var open_error: int = DirAccess.get_open_error()
                     printerr("Failed to open res:// directory: " + str(open_error))
                     
                     # Try alternative approach with absolute path
                     if debug_mode:
                         print("Trying alternative directory creation approach...")
-                    var make_dir_error = DirAccess.make_dir_recursive_absolute(scene_dir_abs)
+                    var make_dir_error: int = DirAccess.make_dir_recursive_absolute(scene_dir_abs)
                     if debug_mode:
                         print("Make directory result (absolute): " + str(make_dir_error))
                     
@@ -335,7 +335,7 @@ func create_scene(params):
                     # Create the directory using the DirAccess instance
                     if debug_mode:
                         print("Creating directory using DirAccess: " + scene_dir_relative)
-                    var make_dir_error = dir.make_dir_recursive(scene_dir_relative)
+                    var make_dir_error: int = dir.make_dir_recursive(scene_dir_relative)
                     if debug_mode:
                         print("Make directory result: " + str(make_dir_error))
                     
@@ -359,7 +359,7 @@ func create_scene(params):
         # Save the scene
         if debug_mode:
             print("Saving scene to: " + full_scene_path)
-        var save_error = ResourceSaver.save(packed_scene, full_scene_path)
+        var save_error: int = ResourceSaver.save(packed_scene, full_scene_path)
         if debug_mode:
             print("Save result: " + str(save_error) + " (OK=" + str(OK) + ")")
         
@@ -371,13 +371,13 @@ func create_scene(params):
                 OS.delay_msec(500)  # 500ms delay
                 
                 # Verify the file was actually created using multiple methods
-                var file_check_abs = FileAccess.file_exists(absolute_scene_path)
+                var file_check_abs: bool = FileAccess.file_exists(absolute_scene_path)
                 print("File exists check (absolute path): " + str(file_check_abs))
                 
-                var file_check_res = FileAccess.file_exists(full_scene_path)
+                var file_check_res: bool = FileAccess.file_exists(full_scene_path)
                 print("File exists check (resource path): " + str(file_check_res))
                 
-                var res_exists = ResourceLoader.exists(full_scene_path)
+                var res_exists: bool = ResourceLoader.exists(full_scene_path)
                 print("Resource exists check: " + str(res_exists))
                 
                 # If file doesn't exist by absolute path, try to create a test file in the same directory
@@ -386,7 +386,7 @@ func create_scene(params):
                     
                     # Try to write a test file to the same directory
                     var test_scene_file_path = scene_dir_res + "/test_scene_file.tmp"
-                    var test_scene_file = FileAccess.open(test_scene_file_path, FileAccess.WRITE)
+                    var test_scene_file: FileAccess = FileAccess.open(test_scene_file_path, FileAccess.WRITE)
                     
                     if test_scene_file:
                         test_scene_file.store_string("Test scene directory write")
@@ -394,7 +394,7 @@ func create_scene(params):
                         print("Successfully wrote test file to scene directory: " + test_scene_file_path)
                         
                         # Check if the test file exists
-                        var test_file_exists = FileAccess.file_exists(test_scene_file_path)
+                        var test_file_exists: bool = FileAccess.file_exists(test_scene_file_path)
                         print("Test file exists: " + str(test_file_exists))
                         
                         if test_file_exists:
@@ -404,7 +404,7 @@ func create_scene(params):
                             
                             # Try saving with a different approach
                             print("Trying alternative save approach...")
-                            var alt_save_error = ResourceSaver.save(packed_scene, test_scene_file_path + ".tscn")
+                            var alt_save_error: int = ResourceSaver.save(packed_scene, test_scene_file_path + ".tscn")
                             print("Alternative save result: " + str(alt_save_error))
                             
                             # Clean up test files
@@ -414,7 +414,7 @@ func create_scene(params):
                         else:
                             printerr("Test file couldn't be verified. This suggests filesystem access issues.")
                     else:
-                        var write_error = FileAccess.get_open_error()
+                        var write_error: int = FileAccess.get_open_error()
                         printerr("Failed to write test file to scene directory: " + str(write_error))
                         printerr("This confirms there are permission or path issues with the scene directory.")
                     
@@ -427,7 +427,7 @@ func create_scene(params):
                     print("Scene file verified to exist!")
                     
                     # Try to load the scene to verify it's valid
-                    var test_load = ResourceLoader.load(full_scene_path)
+                    var test_load: Resource = ResourceLoader.load(full_scene_path)
                     if test_load:
                         print("Scene created and verified successfully at: " + params.scene_path)
                         print("Scene file can be loaded correctly.")
@@ -442,7 +442,7 @@ func create_scene(params):
                     quit(1)
             else:
                 # In non-debug mode, just check if the file exists
-                var file_exists = FileAccess.file_exists(full_scene_path)
+                var file_exists: bool = FileAccess.file_exists(full_scene_path)
                 if file_exists:
                     print("Scene created successfully at: " + params.scene_path)
                 else:
@@ -450,7 +450,7 @@ func create_scene(params):
                     quit(1)
         else:
             # Handle specific error codes
-            var error_message = "Failed to save scene. Error code: " + str(save_error)
+            var error_message: String = "Failed to save scene. Error code: " + str(save_error)
             
             if save_error == ERR_CANT_CREATE:
                 error_message += " (ERR_CANT_CREATE - Cannot create the scene file)"
@@ -478,7 +478,7 @@ func add_node(params):
     if debug_mode:
         print("Scene path (with res://): " + full_scene_path)
     
-    var absolute_scene_path = ProjectSettings.globalize_path(full_scene_path)
+    var absolute_scene_path: String = ProjectSettings.globalize_path(full_scene_path)
     if debug_mode:
         print("Absolute scene path: " + absolute_scene_path)
     
@@ -498,7 +498,7 @@ func add_node(params):
         print("Scene instantiated")
     
     # Use traditional if-else statement for better compatibility
-    var parent_path = "root"  # Default value
+    var parent_path: String = "root"  # Default value
     if params.has("parent_node_path"):
         parent_path = params.parent_node_path
     if debug_mode:
@@ -574,20 +574,20 @@ func add_node(params):
     if debug_mode:
         print("Node added to parent and ownership set")
     
-    var packed_scene = PackedScene.new()
-    var result = packed_scene.pack(scene_root)
+    var packed_scene: PackedScene = PackedScene.new()
+    var result: int = packed_scene.pack(scene_root)
     if debug_mode:
         print("Pack result: " + str(result) + " (OK=" + str(OK) + ")")
     
     if result == OK:
         if debug_mode:
             print("Saving scene to: " + absolute_scene_path)
-        var save_error = ResourceSaver.save(packed_scene, absolute_scene_path)
+        var save_error: int = ResourceSaver.save(packed_scene, absolute_scene_path)
         if debug_mode:
             print("Save result: " + str(save_error) + " (OK=" + str(OK) + ")")
         if save_error == OK:
             if debug_mode:
-                var file_check_after = FileAccess.file_exists(absolute_scene_path)
+                var file_check_after: bool = FileAccess.file_exists(absolute_scene_path)
                 print("File exists check after save: " + str(file_check_after))
                 if file_check_after:
                     print("Node '" + params.node_name + "' of type '" + params.node_type + "' added successfully")
@@ -613,14 +613,14 @@ func load_sprite(params):
         print("Full scene path (with res://): " + full_scene_path)
     
     # Check if the scene file exists
-    var file_check = FileAccess.file_exists(full_scene_path)
+    var file_check: bool = FileAccess.file_exists(full_scene_path)
     if debug_mode:
         print("Scene file exists check: " + str(file_check))
     
     if not file_check:
         printerr("Scene file does not exist at: " + full_scene_path)
         # Get the absolute path for reference
-        var absolute_path = ProjectSettings.globalize_path(full_scene_path)
+        var absolute_path: String = ProjectSettings.globalize_path(full_scene_path)
         printerr("Absolute file path that doesn't exist: " + absolute_path)
         quit(1)
     
@@ -700,28 +700,28 @@ func load_sprite(params):
             print("Set texture on TextureRect node")
     
     # Save the modified scene
-    var packed_scene = PackedScene.new()
-    var result = packed_scene.pack(scene_root)
+    var packed_scene: PackedScene = PackedScene.new()
+    var result: int = packed_scene.pack(scene_root)
     if debug_mode:
         print("Pack result: " + str(result) + " (OK=" + str(OK) + ")")
     
     if result == OK:
         if debug_mode:
             print("Saving scene to: " + full_scene_path)
-        var error = ResourceSaver.save(packed_scene, full_scene_path)
+        var error: int = ResourceSaver.save(packed_scene, full_scene_path)
         if debug_mode:
             print("Save result: " + str(error) + " (OK=" + str(OK) + ")")
         
         if error == OK:
             # Verify the file was actually updated
             if debug_mode:
-                var file_check_after = FileAccess.file_exists(full_scene_path)
+                var file_check_after: bool = FileAccess.file_exists(full_scene_path)
                 print("File exists check after save: " + str(file_check_after))
                 
                 if file_check_after:
                     print("Sprite loaded successfully with texture: " + full_texture_path)
                     # Get the absolute path for reference
-                    var absolute_path = ProjectSettings.globalize_path(full_scene_path)
+                    var absolute_path: String = ProjectSettings.globalize_path(full_scene_path)
                     print("Absolute file path: " + absolute_path)
                 else:
                     printerr("File reported as saved but does not exist at: " + full_scene_path)
@@ -753,14 +753,14 @@ func export_mesh_library(params):
         print("Full output path (with res://): " + full_output_path)
     
     # Check if the scene file exists
-    var file_check = FileAccess.file_exists(full_scene_path)
+    var file_check: bool = FileAccess.file_exists(full_scene_path)
     if debug_mode:
         print("Scene file exists check: " + str(file_check))
     
     if not file_check:
         printerr("Scene file does not exist at: " + full_scene_path)
         # Get the absolute path for reference
-        var absolute_path = ProjectSettings.globalize_path(full_scene_path)
+        var absolute_path: String = ProjectSettings.globalize_path(full_scene_path)
         printerr("Absolute file path that doesn't exist: " + absolute_path)
         quit(1)
     
@@ -781,7 +781,7 @@ func export_mesh_library(params):
         print("Scene instantiated")
     
     # Create a new MeshLibrary
-    var mesh_library = MeshLibrary.new()
+    var mesh_library: MeshLibrary = MeshLibrary.new()
     if debug_mode:
         print("Created new MeshLibrary")
     
@@ -796,7 +796,7 @@ func export_mesh_library(params):
             print("Using all mesh items in the scene")
     
     # Process all child nodes
-    var item_id = 0
+    var item_id: int = 0
     if debug_mode:
         print("Processing child nodes...")
     
@@ -839,7 +839,7 @@ func export_mesh_library(params):
                 print("Added mesh to library with ID: " + str(item_id))
             
             # Add collision shape if available
-            var collision_added = false
+            var collision_added: bool = false
             for collision_child in child.get_children():
                 if collision_child is CollisionShape3D and collision_child.shape:
                     mesh_library.set_item_shapes(item_id, [collision_child.shape])
@@ -865,7 +865,7 @@ func export_mesh_library(params):
         print("Processed " + str(item_id) + " meshes")
     
     # Create directory if it doesn't exist
-    var dir = DirAccess.open("res://")
+    var dir: DirAccess = DirAccess.open("res://")
     if dir == null:
         printerr("Failed to open res:// directory")
         printerr("DirAccess error: " + str(DirAccess.get_open_error()))
@@ -878,7 +878,7 @@ func export_mesh_library(params):
     if output_dir != "res://" and not dir.dir_exists(output_dir.substr(6)):  # Remove "res://" prefix
         if debug_mode:
             print("Creating directory: " + output_dir)
-        var error = dir.make_dir_recursive(output_dir.substr(6))  # Remove "res://" prefix
+        var error: int = dir.make_dir_recursive(output_dir.substr(6))  # Remove "res://" prefix
         if error != OK:
             printerr("Failed to create directory: " + output_dir + ", error: " + str(error))
             quit(1)
@@ -887,20 +887,20 @@ func export_mesh_library(params):
     if item_id > 0:
         if debug_mode:
             print("Saving MeshLibrary to: " + full_output_path)
-        var error = ResourceSaver.save(mesh_library, full_output_path)
+        var error: int = ResourceSaver.save(mesh_library, full_output_path)
         if debug_mode:
             print("Save result: " + str(error) + " (OK=" + str(OK) + ")")
         
         if error == OK:
             # Verify the file was actually created
             if debug_mode:
-                var file_check_after = FileAccess.file_exists(full_output_path)
+                var file_check_after: bool = FileAccess.file_exists(full_output_path)
                 print("File exists check after save: " + str(file_check_after))
                 
                 if file_check_after:
                     print("MeshLibrary exported successfully with " + str(item_id) + " items to: " + full_output_path)
                     # Get the absolute path for reference
-                    var absolute_path = ProjectSettings.globalize_path(full_output_path)
+                    var absolute_path: String = ProjectSettings.globalize_path(full_output_path)
                     print("Absolute file path: " + absolute_path)
                 else:
                     printerr("File reported as saved but does not exist at: " + full_output_path)
@@ -913,12 +913,12 @@ func export_mesh_library(params):
 
 # Find files with a specific extension recursively
 func find_files(path, extension):
-    var files = []
-    var dir = DirAccess.open(path)
+    var files: Array = []
+    var dir: DirAccess = DirAccess.open(path)
     
     if dir:
         dir.list_dir_begin()
-        var file_name = dir.get_next()
+        var file_name: String = dir.get_next()
         
         while file_name != "":
             if dir.current_is_dir() and not file_name.begins_with("."):
@@ -946,12 +946,12 @@ func get_uid(params):
         print("Full file path (with res://): " + file_path)
     
     # Get the absolute path for reference
-    var absolute_path = ProjectSettings.globalize_path(file_path)
+    var absolute_path: String = ProjectSettings.globalize_path(file_path)
     if debug_mode:
         print("Absolute file path: " + absolute_path)
     
     # Ensure the file exists
-    var file_check = FileAccess.file_exists(file_path)
+    var file_check: bool = FileAccess.file_exists(file_path)
     if debug_mode:
         print("File exists check: " + str(file_check))
     
@@ -965,21 +965,21 @@ func get_uid(params):
     if debug_mode:
         print("UID file path: " + uid_path)
     
-    var uid_check = FileAccess.file_exists(uid_path)
+    var uid_check: bool = FileAccess.file_exists(uid_path)
     if debug_mode:
         print("UID file exists check: " + str(uid_check))
     
-    var f = FileAccess.open(uid_path, FileAccess.READ)
+    var f: FileAccess = FileAccess.open(uid_path, FileAccess.READ)
     
     if f:
         # Read the UID content
-        var uid_content = f.get_as_text()
+        var uid_content: String = f.get_as_text()
         f.close()
         if debug_mode:
             print("UID content read successfully")
         
         # Return the UID content
-        var result = {
+        var result: Dictionary = {
             "file": file_path,
             "absolutePath": absolute_path,
             "uid": uid_content.strip_edges(),
@@ -993,7 +993,7 @@ func get_uid(params):
             print("UID file does not exist or could not be opened")
         
         # UID file doesn't exist
-        var result = {
+        var result: Dictionary = {
             "file": file_path,
             "absolutePath": absolute_path,
             "exists": false,
@@ -1008,7 +1008,7 @@ func resave_resources(params):
     print("Resaving all resources to update UID references...")
     
     # Get project path if provided
-    var project_path = "res://"
+    var project_path: String = "res://"
     if params.has("project_path"):
         project_path = params.project_path
         if not project_path.begins_with("res://"):
@@ -1027,15 +1027,15 @@ func resave_resources(params):
         print("Found " + str(scenes.size()) + " scenes")
     
     # Resave each scene
-    var success_count = 0
-    var error_count = 0
+    var success_count: int = 0
+    var error_count: int = 0
     
     for scene_path in scenes:
         if debug_mode:
             print("Processing scene: " + scene_path)
         
         # Check if the scene file exists
-        var file_check = FileAccess.file_exists(scene_path)
+        var file_check: bool = FileAccess.file_exists(scene_path)
         if debug_mode:
             print("Scene file exists check: " + str(file_check))
         
@@ -1049,7 +1049,7 @@ func resave_resources(params):
         if scene:
             if debug_mode:
                 print("Scene loaded successfully, saving...")
-            var error = ResourceSaver.save(scene, scene_path)
+            var error: int = ResourceSaver.save(scene, scene_path)
             if debug_mode:
                 print("Save result: " + str(error) + " (OK=" + str(OK) + ")")
             
@@ -1059,7 +1059,7 @@ func resave_resources(params):
                     print("Scene saved successfully: " + scene_path)
                 
                     # Verify the file was actually updated
-                    var file_check_after = FileAccess.file_exists(scene_path)
+                    var file_check_after: bool = FileAccess.file_exists(scene_path)
                     print("File exists check after save: " + str(file_check_after))
                 
                     if not file_check_after:
@@ -1079,19 +1079,19 @@ func resave_resources(params):
         print("Found " + str(scripts.size()) + " scripts/shaders")
     
     # Check for missing .uid files
-    var missing_uids = 0
-    var generated_uids = 0
+    var missing_uids: int = 0
+    var generated_uids: int = 0
     
     for script_path in scripts:
         if debug_mode:
             print("Checking UID for: " + script_path)
         var uid_path = script_path + ".uid"
         
-        var uid_check = FileAccess.file_exists(uid_path)
+        var uid_check: bool = FileAccess.file_exists(uid_path)
         if debug_mode:
             print("UID file exists check: " + str(uid_check))
         
-        var f = FileAccess.open(uid_path, FileAccess.READ)
+        var f: FileAccess = FileAccess.open(uid_path, FileAccess.READ)
         if not f:
             missing_uids += 1
             if debug_mode:
@@ -1100,7 +1100,7 @@ func resave_resources(params):
             # Force a save to generate UID
             var res = load(script_path)
             if res:
-                var error = ResourceSaver.save(res, script_path)
+                var error: int = ResourceSaver.save(res, script_path)
                 if debug_mode:
                     print("Save result: " + str(error) + " (OK=" + str(OK) + ")")
                 
@@ -1110,7 +1110,7 @@ func resave_resources(params):
                         print("Generated UID for: " + script_path)
                     
                         # Verify the UID file was actually created
-                        var uid_check_after = FileAccess.file_exists(uid_path)
+                        var uid_check_after: bool = FileAccess.file_exists(uid_path)
                         print("UID file exists check after save: " + str(uid_check_after))
                     
                         if not uid_check_after:
@@ -1144,14 +1144,14 @@ func save_scene(params):
         print("Full scene path (with res://): " + full_scene_path)
     
     # Check if the scene file exists
-    var file_check = FileAccess.file_exists(full_scene_path)
+    var file_check: bool = FileAccess.file_exists(full_scene_path)
     if debug_mode:
         print("Scene file exists check: " + str(file_check))
     
     if not file_check:
         printerr("Scene file does not exist at: " + full_scene_path)
         # Get the absolute path for reference
-        var absolute_path = ProjectSettings.globalize_path(full_scene_path)
+        var absolute_path: String = ProjectSettings.globalize_path(full_scene_path)
         printerr("Absolute file path that doesn't exist: " + absolute_path)
         quit(1)
     
@@ -1179,7 +1179,7 @@ func save_scene(params):
     
     # Create directory if it doesn't exist
     if params.has("new_path"):
-        var dir = DirAccess.open("res://")
+        var dir: DirAccess = DirAccess.open("res://")
         if dir == null:
             printerr("Failed to open res:// directory")
             printerr("DirAccess error: " + str(DirAccess.get_open_error()))
@@ -1192,34 +1192,34 @@ func save_scene(params):
         if scene_dir != "res://" and not dir.dir_exists(scene_dir.substr(6)):  # Remove "res://" prefix
             if debug_mode:
                 print("Creating directory: " + scene_dir)
-            var error = dir.make_dir_recursive(scene_dir.substr(6))  # Remove "res://" prefix
+            var error: int = dir.make_dir_recursive(scene_dir.substr(6))  # Remove "res://" prefix
             if error != OK:
                 printerr("Failed to create directory: " + scene_dir + ", error: " + str(error))
                 quit(1)
     
     # Create a packed scene
-    var packed_scene = PackedScene.new()
-    var result = packed_scene.pack(scene_root)
+    var packed_scene: PackedScene = PackedScene.new()
+    var result: int = packed_scene.pack(scene_root)
     if debug_mode:
         print("Pack result: " + str(result) + " (OK=" + str(OK) + ")")
     
     if result == OK:
         if debug_mode:
             print("Saving scene to: " + save_path)
-        var error = ResourceSaver.save(packed_scene, save_path)
+        var error: int = ResourceSaver.save(packed_scene, save_path)
         if debug_mode:
             print("Save result: " + str(error) + " (OK=" + str(OK) + ")")
         
         if error == OK:
             # Verify the file was actually created/updated
             if debug_mode:
-                var file_check_after = FileAccess.file_exists(save_path)
+                var file_check_after: bool = FileAccess.file_exists(save_path)
                 print("File exists check after save: " + str(file_check_after))
                 
                 if file_check_after:
                     print("Scene saved successfully to: " + save_path)
                     # Get the absolute path for reference
-                    var absolute_path = ProjectSettings.globalize_path(save_path)
+                    var absolute_path: String = ProjectSettings.globalize_path(save_path)
                     print("Absolute file path: " + absolute_path)
                 else:
                     printerr("File reported as saved but does not exist at: " + save_path)
