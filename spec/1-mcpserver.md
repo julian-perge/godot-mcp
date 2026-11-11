@@ -55,7 +55,7 @@ See [AGENTS.md](../AGENTS.md). This change touches:
 - `tests/run_scene.test.mjs`: assertions on validation messages that now come from Zod.
 - A new test file for the tool list (see Testing Strategy).
 
-Keep the Zod schemas in `src/index.ts`, next to their `registerTool` calls. Do not add a schema module.
+Keep the Zod schemas in `src/index.ts`, as module-level `z.object` constants above `GodotServer`. Each handler takes the type that `z.infer` gives for its schema, so the schemas cannot sit inline in the `registerTool` calls. Do not add a schema module.
 
 ## Code Style
 

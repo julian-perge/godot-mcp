@@ -62,7 +62,11 @@ Run the verify command from `AGENTS.md` (`Every task`) before each commit. Open 
 
 ## Review
 
+Run the review in a new session, not in the build session. The command starts no subagent, so the build session would review its own work. Check out the PR branch first (`gh pr checkout <pr>`), because the command reviews staged changes or recent commits.
+
 Run `/agent-skills:review` on the branch. Give it the task issue and the spec file as the spec. Name `CODING_STANDARDS.md` as the standard when the repo has one, and `AGENTS.md` when it does not. The review does not read either on its own.
+
+Fix small findings in the review session. Start a new build session for large ones.
 
 ## Reports
 

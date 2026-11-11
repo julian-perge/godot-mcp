@@ -15,14 +15,9 @@ import { promisify } from 'util';
 import { createConnection, createServer } from 'net';
 import { randomBytes } from 'crypto';
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ErrorCode,
-  ListToolsRequestSchema,
-  McpError,
-} from '@modelcontextprotocol/sdk/types.js';
+import * as z from 'zod';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -115,11 +110,148 @@ interface OperationParams {
   [key: string]: any;
 }
 
+// The input schemas sit outside setupToolHandlers so that each handler can take
+// the argument type that Zod infers from its schema.
+const launchEditorSchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+});
+type LaunchEditorArgs = z.infer<typeof launchEditorSchema>;
+
+const runProjectSchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+  scene: z.string().optional().describe('Optional: Specific scene to run'),
+  args: z.array(z.string()).optional().describe('Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.'),
+  harness: z.boolean().optional().describe('Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.'),
+  embedded: z.boolean().optional().describe('Optional: macOS only (default: false). Run the game with no window, through Godot\'s undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness.'),
+});
+type RunProjectArgs = z.infer<typeof runProjectSchema>;
+
+const runSceneSchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+  scenePath: z.string().describe('Scene to run, as a res:// path or a path relative to the project'),
+  timeoutMs: z.number().int().min(1).max(MAX_SCENE_TIMEOUT_MS).optional().describe('Time in milliseconds before the scene is stopped automatically (default: 30000)'),
+  args: z.array(z.string()).optional().describe('Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.'),
+  harness: z.boolean().optional().describe('Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.'),
+  embedded: z.boolean().optional().describe('Optional: macOS only (default: false). Run the game with no window, through Godot\'s undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness.'),
+});
+type RunSceneArgs = z.infer<typeof runSceneSchema>;
+
+const captureScreenshotSchema = z.object({
+  savePath: z.string().optional().describe('Optional: Absolute path of a .png file to also write the screenshot to'),
+});
+type CaptureScreenshotArgs = z.infer<typeof captureScreenshotSchema>;
+
+const simulateInputSchema = z.object({
+  commands: z.array(z.object({
+    type: z.enum(['click', 'mouse_move', 'mouse_drag', 'key', 'action', 'action_pulse', 'text', 'wait', 'screenshot']),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    from_x: z.number().optional(),
+    from_y: z.number().optional(),
+    to_x: z.number().optional(),
+    to_y: z.number().optional(),
+    button: z.enum(['left', 'right', 'middle']).optional().describe('Mouse button (default: left)'),
+    double: z.boolean().optional().describe('Send a double click (default: false)'),
+    key: z.string().optional().describe('Godot key name such as "A", "Space", "Enter", "Escape", "Up" or "F5". A name such as "Ctrl+S" also works.'),
+    modifiers: z.array(z.enum(['shift', 'ctrl', 'alt', 'meta'])).optional(),
+    action: z.string().optional().describe('Input action from the project\'s Input Map, or a built-in one such as "ui_accept"'),
+    pressed: z.boolean().optional().describe('Press or release the action (default: true)'),
+    duration_ms: z.number().int().min(0).max(MAX_SCENE_TIMEOUT_MS).optional().describe('How long action_pulse holds the action, or how long wait waits (default: 100)'),
+    text: z.string().optional().describe('Characters to type'),
+    delay_ms: z.number().int().min(0).max(MAX_SCENE_TIMEOUT_MS).optional().describe('Pause between typed characters (default: 50)'),
+  })).min(1).max(500).describe('Commands to run in order: click {x, y, button?, double?}, mouse_move {x, y}, mouse_drag {from_x, from_y, to_x, to_y, button?}, key {key, modifiers?}, action {action, pressed?}, action_pulse {action, duration_ms?}, text {text, delay_ms?}, wait {duration_ms?}, screenshot {}'),
+  warpMouse: z.boolean().optional().describe('Optional: Also move the real mouse cursor to each position (default: false). Only needed when the game reads the cursor with get_global_mouse_position() or get_mouse_position(). It moves the cursor on the desktop.'),
+  timeoutMs: z.number().int().min(1).max(MAX_SCENE_TIMEOUT_MS).optional().describe('Optional: How long to wait for the whole sequence in milliseconds (default: 30000)'),
+});
+type SimulateInputArgs = z.infer<typeof simulateInputSchema>;
+
+const runGutTestsSchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+  test: z.array(z.string()).optional().describe('Optional: res:// test scripts to run, e.g. ["res://test/unit/test_battle.gd"]. The .gutconfig.json dirs are skipped unless dir is also given.'),
+  dir: z.array(z.string()).optional().describe('Optional: res:// directories to search for tests instead of the .gutconfig.json dirs, e.g. ["res://test/unit"]'),
+  unitTestName: z.string().optional().describe('Optional: Only run tests whose name contains this text (-gunit_test_name)'),
+  select: z.string().optional().describe('Optional: Only run scripts whose file name contains this text (-gselect)'),
+  innerClass: z.string().optional().describe('Optional: Only run inner test classes whose name contains this text (-ginner_class)'),
+  includeSubdirs: z.boolean().optional().describe('Optional: Search subdirectories of dir (default: true)'),
+  headless: z.boolean().optional().describe('Optional: Run without a window (default: true). Use false for tests that need rendering.'),
+  log: z.number().int().min(0).max(3).optional().describe('Optional: GUT log level 0-3'),
+  timeoutMs: z.number().int().min(1).max(MAX_SCENE_TIMEOUT_MS).optional().describe('Optional: Stop the run after this many milliseconds (default: 600000)'),
+});
+type RunGutTestsArgs = z.infer<typeof runGutTestsSchema>;
+
+const listProjectsSchema = z.object({
+  directory: z.string().describe('Directory to search for Godot projects'),
+  recursive: z.boolean().optional().describe('Whether to search recursively (default: false)'),
+});
+type ListProjectsArgs = z.infer<typeof listProjectsSchema>;
+
+const getProjectInfoSchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+});
+type GetProjectInfoArgs = z.infer<typeof getProjectInfoSchema>;
+
+const createSceneSchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+  scenePath: z.string().describe('Path where the scene file will be saved (relative to project)'),
+  rootNodeType: z.string().optional().describe('Type of the root node (e.g., Node2D, Node3D)'),
+});
+type CreateSceneArgs = z.infer<typeof createSceneSchema>;
+
+const addNodeSchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+  scenePath: z.string().describe('Path to the scene file (relative to project)'),
+  parentNodePath: z.string().optional().describe('Path to the parent node (e.g., "root" or "root/Player")'),
+  nodeType: z.string().describe('Type of node to add (e.g., Sprite2D, CollisionShape2D)'),
+  nodeName: z.string().describe('Name for the new node'),
+  // A loose object keeps every key the caller sends. A plain z.object
+  // would drop them all, since it declares no keys.
+  properties: z.looseObject({}).optional().describe('Optional properties to set on the node'),
+});
+type AddNodeArgs = z.infer<typeof addNodeSchema>;
+
+const loadSpriteSchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+  scenePath: z.string().describe('Path to the scene file (relative to project)'),
+  nodePath: z.string().describe('Path to the Sprite2D node (e.g., "root/Player/Sprite2D")'),
+  texturePath: z.string().describe('Path to the texture file (relative to project)'),
+});
+type LoadSpriteArgs = z.infer<typeof loadSpriteSchema>;
+
+const exportMeshLibrarySchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+  scenePath: z.string().describe('Path to the scene file (.tscn) to export'),
+  outputPath: z.string().describe('Path where the mesh library (.res) will be saved'),
+  meshItemNames: z.array(z.string()).optional().describe('Optional: Names of specific mesh items to include (defaults to all)'),
+});
+type ExportMeshLibraryArgs = z.infer<typeof exportMeshLibrarySchema>;
+
+const saveSceneSchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+  scenePath: z.string().describe('Path to the scene file (relative to project)'),
+  newPath: z.string().optional().describe('Optional: New path to save the scene to (for creating variants)'),
+});
+type SaveSceneArgs = z.infer<typeof saveSceneSchema>;
+
+const getUidSchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+  filePath: z.string().describe('Path to the file (relative to project) for which to get the UID'),
+});
+type GetUidArgs = z.infer<typeof getUidSchema>;
+
+const updateProjectUidsSchema = z.object({
+  projectPath: z.string().describe('Path to the Godot project directory'),
+});
+type UpdateProjectUidsArgs = z.infer<typeof updateProjectUidsSchema>;
+
+const viewLogSchema = z.object({
+  lineCount: z.number().optional().describe('Number of trailing lines to return (default 50, max 1000)'),
+});
+type ViewLogArgs = z.infer<typeof viewLogSchema>;
 /**
  * Main server class for the Godot MCP server
  */
 class GodotServer {
-  private server: Server;
+  private server: McpServer;
   private currentProcess: GodotProcess | null = null;
   private godotPath: string | null = null;
   private operationsScriptPath: string;
@@ -135,47 +267,7 @@ class GodotServer {
   // Harness requests run one at a time, so two tool calls never interleave
   private harnessQueue: Promise<unknown> = Promise.resolve();
 
-  /**
-   * Parameter name mappings between snake_case and camelCase
-   * This allows the server to accept both formats
-   */
-  private parameterMappings: Record<string, string> = {
-    'project_path': 'projectPath',
-    'scene_path': 'scenePath',
-    'root_node_type': 'rootNodeType',
-    'parent_node_path': 'parentNodePath',
-    'node_type': 'nodeType',
-    'node_name': 'nodeName',
-    'texture_path': 'texturePath',
-    'node_path': 'nodePath',
-    'output_path': 'outputPath',
-    'mesh_item_names': 'meshItemNames',
-    'new_path': 'newPath',
-    'file_path': 'filePath',
-    'directory': 'directory',
-    'recursive': 'recursive',
-    'scene': 'scene',
-    'line_count': 'lineCount',
-    'save_path': 'savePath',
-    'warp_mouse': 'warpMouse',
-    // GUT-related params
-    'unit_test_name': 'unitTestName',
-    'inner_class': 'innerClass',
-    'include_subdirs': 'includeSubdirs',
-    'timeout_ms': 'timeoutMs',
-  };
-
-  /**
-   * Reverse mapping from camelCase to snake_case
-   * Generated from parameterMappings for quick lookups
-   */
-  private reverseParameterMappings: Record<string, string> = {};
-
   constructor(config?: GodotServerConfig) {
-    // Initialize reverse parameter mappings
-    for (const [snakeCase, camelCase] of Object.entries(this.parameterMappings)) {
-      this.reverseParameterMappings[camelCase] = snakeCase;
-    }
     // Apply configuration if provided
     let debugMode = DEBUG_MODE;
     let godotDebugMode = GODOT_DEBUG_MODE;
@@ -211,23 +303,16 @@ class GodotServer {
     if (debugMode) console.error(`[DEBUG] Operations script path: ${this.operationsScriptPath}`);
 
     // Initialize the MCP server
-    this.server = new Server(
-      {
-        name: 'godot-mcp',
-        version: '0.1.0',
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      }
-    );
+    this.server = new McpServer({
+      name: 'godot-mcp',
+      version: '0.1.0',
+    });
 
     // Set up tool handlers
     this.setupToolHandlers();
 
     // Error handling
-    this.server.onerror = (error) => console.error('[MCP Error]', error);
+    this.server.server.onerror = (error) => console.error('[MCP Error]', error);
 
     // A Godot child does not exit with this server, so a run left behind
     // keeps its window open after the client goes away. Stop it when the
@@ -504,39 +589,6 @@ class GodotServer {
   }
 
   /**
-   * Normalize parameters to camelCase format
-   * @param params Object with either snake_case or camelCase keys
-   * @returns Object with all keys in camelCase format
-   */
-  private normalizeParameters(params: OperationParams): OperationParams {
-    if (!params || typeof params !== 'object') {
-      return params;
-    }
-    
-    const result: OperationParams = {};
-    
-    for (const key in params) {
-      if (Object.prototype.hasOwnProperty.call(params, key)) {
-        let normalizedKey = key;
-        
-        // If the key is in snake_case, convert it to camelCase using our mapping
-        if (key.includes('_') && this.parameterMappings[key]) {
-          normalizedKey = this.parameterMappings[key];
-        }
-        
-        // Handle nested objects recursively
-        if (typeof params[key] === 'object' && params[key] !== null && !Array.isArray(params[key])) {
-          result[normalizedKey] = this.normalizeParameters(params[key] as OperationParams);
-        } else {
-          result[normalizedKey] = params[key];
-        }
-      }
-    }
-    
-    return result;
-  }
-
-  /**
    * Convert camelCase keys to snake_case
    * @param params Object with camelCase keys
    * @returns Object with snake_case keys
@@ -547,7 +599,7 @@ class GodotServer {
     for (const key in params) {
       if (Object.prototype.hasOwnProperty.call(params, key)) {
         // Convert camelCase to snake_case
-        const snakeKey = this.reverseParameterMappings[key] || key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+        const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
         
         // Handle nested objects recursively
         if (typeof params[key] === 'object' && params[key] !== null && !Array.isArray(params[key])) {
@@ -748,537 +800,191 @@ class GodotServer {
   }
 
   /**
-   * Set up the tool handlers for the MCP server
+   * Register the tools with the MCP server
    */
   private setupToolHandlers() {
-    // Define available tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
-        {
-          name: 'launch_editor',
-          description: 'Launch Godot editor for a specific project',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-            },
-            required: ['projectPath'],
-          },
-        },
-        {
-          name: 'run_project',
-          description: 'Run the Godot project and capture output. Starting a run stops the previous one. The game runs with Godot\'s local debugger, so a runtime script error pauses it at a "debug>" prompt that get_debug_output shows.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-              scene: {
-                type: 'string',
-                description: 'Optional: Specific scene to run',
-              },
-              args: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.',
-              },
-              harness: {
-                type: 'boolean',
-                description: 'Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.',
-              },
-              embedded: {
-                type: 'boolean',
-                description: 'Optional: macOS only (default: false). Run the game with no window, through Godot\'s undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness.',
-              },
-            },
-            required: ['projectPath'],
-          },
-        },
-        {
-          name: 'run_scene',
-          description: 'Run a specific Godot scene and capture output. Starting a run stops the previous one. The game runs with Godot\'s local debugger, so a runtime script error pauses it at a "debug>" prompt that get_debug_output shows.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-              scenePath: {
-                type: 'string',
-                description: 'Scene to run, as a res:// path or a path relative to the project',
-              },
-              timeoutMs: {
-                type: 'integer',
-                description: 'Time in milliseconds before the scene is stopped automatically (default: 30000)',
-                minimum: 1,
-                maximum: MAX_SCENE_TIMEOUT_MS,
-              },
-              args: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.',
-              },
-              harness: {
-                type: 'boolean',
-                description: 'Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.',
-              },
-              embedded: {
-                type: 'boolean',
-                description: 'Optional: macOS only (default: false). Run the game with no window, through Godot\'s undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness.',
-              },
-            },
-            required: ['projectPath', 'scenePath'],
-          },
-        },
-        {
-          name: 'capture_screenshot',
-          description: 'Capture a PNG of what the game started by run_project or run_scene is rendering right now, returned as an image. The image is in the game\'s viewport coordinates, the ones node positions use, so with stretch mode canvas_items or viewport it has the project\'s base size whatever the window size. Fails for a headless game or a window that is minimized, hidden or covered, and times out while a script error holds the game at a "debug>" prompt.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              savePath: {
-                type: 'string',
-                description: 'Optional: Absolute path of a .png file to also write the screenshot to',
-              },
-            },
-            required: [],
-          },
-        },
-        {
-          name: 'simulate_input',
-          description: 'Send mouse, keyboard and input action events to the game started by run_project or run_scene, one command after another, and return the screenshots taken along the way. Positions are in the game\'s viewport coordinates, the same pixels capture_screenshot returns. The sequence stops at the first command that fails.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              commands: {
-                type: 'array',
-                description: 'Commands to run in order: click {x, y, button?, double?}, mouse_move {x, y}, mouse_drag {from_x, from_y, to_x, to_y, button?}, key {key, modifiers?}, action {action, pressed?}, action_pulse {action, duration_ms?}, text {text, delay_ms?}, wait {duration_ms?}, screenshot {}',
-                items: {
-                  type: 'object',
-                  properties: {
-                    type: {
-                      type: 'string',
-                      enum: ['click', 'mouse_move', 'mouse_drag', 'key', 'action', 'action_pulse', 'text', 'wait', 'screenshot'],
-                    },
-                    x: { type: 'number' },
-                    y: { type: 'number' },
-                    from_x: { type: 'number' },
-                    from_y: { type: 'number' },
-                    to_x: { type: 'number' },
-                    to_y: { type: 'number' },
-                    button: {
-                      type: 'string',
-                      enum: ['left', 'right', 'middle'],
-                      description: 'Mouse button (default: left)',
-                    },
-                    double: { type: 'boolean', description: 'Send a double click (default: false)' },
-                    key: {
-                      type: 'string',
-                      description: 'Godot key name such as "A", "Space", "Enter", "Escape", "Up" or "F5". A name such as "Ctrl+S" also works.',
-                    },
-                    modifiers: {
-                      type: 'array',
-                      items: { type: 'string', enum: ['shift', 'ctrl', 'alt', 'meta'] },
-                    },
-                    action: {
-                      type: 'string',
-                      description: 'Input action from the project\'s Input Map, or a built-in one such as "ui_accept"',
-                    },
-                    pressed: { type: 'boolean', description: 'Press or release the action (default: true)' },
-                    duration_ms: {
-                      type: 'number',
-                      description: 'How long action_pulse holds the action, or how long wait waits (default: 100)',
-                    },
-                    text: { type: 'string', description: 'Characters to type' },
-                    delay_ms: { type: 'number', description: 'Pause between typed characters (default: 50)' },
-                  },
-                  required: ['type'],
-                },
-              },
-              warpMouse: {
-                type: 'boolean',
-                description: 'Optional: Also move the real mouse cursor to each position (default: false). Only needed when the game reads the cursor with get_global_mouse_position() or get_mouse_position(). It moves the cursor on the desktop.',
-              },
-              timeoutMs: {
-                type: 'number',
-                description: 'Optional: How long to wait for the whole sequence in milliseconds (default: 30000)',
-              },
-            },
-            required: ['commands'],
-          },
-        },
-        {
-          name: 'get_debug_output',
-          description: 'Get the output, errors and status of the last run_project or run_scene process. Works while it runs and after it exits, crashes or times out, until the next run or stop_project. Keeps the last 1000 lines of each stream.',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-          },
-        },
-        {
-          name: 'stop_project',
-          description: 'Stop the Godot process started by run_project or run_scene and return its final output',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-          },
-        },
-        {
-          name: 'run_gut_tests',
-          description: 'Run GUT tests (res://addons/gut/gut_cmdln.gd) and wait for the result. With no test or dir it runs what .gutconfig.json lists. Passing test runs only those scripts. Fails when GUT reports failures or exits non-zero.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-              test: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Optional: res:// test scripts to run, e.g. ["res://test/unit/test_battle.gd"]. The .gutconfig.json dirs are skipped unless dir is also given.',
-              },
-              dir: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Optional: res:// directories to search for tests instead of the .gutconfig.json dirs, e.g. ["res://test/unit"]',
-              },
-              unitTestName: {
-                type: 'string',
-                description: 'Optional: Only run tests whose name contains this text (-gunit_test_name)',
-              },
-              select: {
-                type: 'string',
-                description: 'Optional: Only run scripts whose file name contains this text (-gselect)',
-              },
-              innerClass: {
-                type: 'string',
-                description: 'Optional: Only run inner test classes whose name contains this text (-ginner_class)',
-              },
-              includeSubdirs: {
-                type: 'boolean',
-                description: 'Optional: Search subdirectories of dir (default: true)',
-              },
-              headless: {
-                type: 'boolean',
-                description: 'Optional: Run without a window (default: true). Use false for tests that need rendering.',
-              },
-              log: {
-                type: 'integer',
-                description: 'Optional: GUT log level 0-3',
-                minimum: 0,
-                maximum: 3,
-              },
-              timeoutMs: {
-                type: 'integer',
-                description: 'Optional: Stop the run after this many milliseconds (default: 600000)',
-                minimum: 1,
-                maximum: MAX_SCENE_TIMEOUT_MS,
-              },
-            },
-            required: ['projectPath'],
-          },
-        },
-        {
-          name: 'get_godot_version',
-          description: 'Get the installed Godot version',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-          },
-        },
-        {
-          name: 'list_projects',
-          description: 'List Godot projects in a directory',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              directory: {
-                type: 'string',
-                description: 'Directory to search for Godot projects',
-              },
-              recursive: {
-                type: 'boolean',
-                description: 'Whether to search recursively (default: false)',
-              },
-            },
-            required: ['directory'],
-          },
-        },
-        {
-          name: 'get_project_info',
-          description: 'Retrieve metadata about a Godot project',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-            },
-            required: ['projectPath'],
-          },
-        },
-        {
-          name: 'create_scene',
-          description: 'Create a new Godot scene file',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-              scenePath: {
-                type: 'string',
-                description: 'Path where the scene file will be saved (relative to project)',
-              },
-              rootNodeType: {
-                type: 'string',
-                description: 'Type of the root node (e.g., Node2D, Node3D)',
-              },
-            },
-            required: ['projectPath', 'scenePath'],
-          },
-        },
-        {
-          name: 'add_node',
-          description: 'Add a node to an existing scene',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-              scenePath: {
-                type: 'string',
-                description: 'Path to the scene file (relative to project)',
-              },
-              parentNodePath: {
-                type: 'string',
-                description: 'Path to the parent node (e.g., "root" or "root/Player")',
-              },
-              nodeType: {
-                type: 'string',
-                description: 'Type of node to add (e.g., Sprite2D, CollisionShape2D)',
-              },
-              nodeName: {
-                type: 'string',
-                description: 'Name for the new node',
-              },
-              properties: {
-                type: 'object',
-                description: 'Optional properties to set on the node',
-              },
-            },
-            required: ['projectPath', 'scenePath', 'nodeType', 'nodeName'],
-          },
-        },
-        {
-          name: 'load_sprite',
-          description: 'Load a sprite into a Sprite2D node',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-              scenePath: {
-                type: 'string',
-                description: 'Path to the scene file (relative to project)',
-              },
-              nodePath: {
-                type: 'string',
-                description: 'Path to the Sprite2D node (e.g., "root/Player/Sprite2D")',
-              },
-              texturePath: {
-                type: 'string',
-                description: 'Path to the texture file (relative to project)',
-              },
-            },
-            required: ['projectPath', 'scenePath', 'nodePath', 'texturePath'],
-          },
-        },
-        {
-          name: 'export_mesh_library',
-          description: 'Export a scene as a MeshLibrary resource',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-              scenePath: {
-                type: 'string',
-                description: 'Path to the scene file (.tscn) to export',
-              },
-              outputPath: {
-                type: 'string',
-                description: 'Path where the mesh library (.res) will be saved',
-              },
-              meshItemNames: {
-                type: 'array',
-                items: {
-                  type: 'string',
-                },
-                description: 'Optional: Names of specific mesh items to include (defaults to all)',
-              },
-            },
-            required: ['projectPath', 'scenePath', 'outputPath'],
-          },
-        },
-        {
-          name: 'save_scene',
-          description: 'Save changes to a scene file',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-              scenePath: {
-                type: 'string',
-                description: 'Path to the scene file (relative to project)',
-              },
-              newPath: {
-                type: 'string',
-                description: 'Optional: New path to save the scene to (for creating variants)',
-              },
-            },
-            required: ['projectPath', 'scenePath'],
-          },
-        },
-        {
-          name: 'get_uid',
-          description: 'Get the UID for a specific file in a Godot project (for Godot 4.4+)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-              filePath: {
-                type: 'string',
-                description: 'Path to the file (relative to project) for which to get the UID',
-              },
-            },
-            required: ['projectPath', 'filePath'],
-          },
-        },
-        {
-          name: 'update_project_uids',
-          description: 'Update UID references in a Godot project by resaving resources (for Godot 4.4+)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Path to the Godot project directory',
-              },
-            },
-            required: ['projectPath'],
-          },
-        },
-        {
-          name: 'view_log',
-          description: 'View recent console output from the editor started by launch_editor, such as script parse errors. Returns the last N lines of captured stdout and stderr. For run_project and run_scene output use get_debug_output.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              lineCount: {
-                type: 'number',
-                description: 'Number of trailing lines to return (default 50, max 1000)',
-              },
-            },
-          },
-        },
-        {
-          name: 'quit_godot',
-          description: 'Close the Godot editor that was launched by this MCP server via launch_editor. Only closes editors spawned by this server. Unsaved changes in that editor are lost.',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-          },
-        },
-      ],
-    }));
+    this.server.registerTool(
+      'launch_editor',
+      {
+        description: 'Launch Godot editor for a specific project',
+        inputSchema: launchEditorSchema,
+      },
+      (args) => this.handleLaunchEditor(args)
+    );
 
-    // Handle tool calls
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      this.logDebug(`Handling tool request: ${request.params.name}`);
-      switch (request.params.name) {
-        case 'launch_editor':
-          return await this.handleLaunchEditor(request.params.arguments);
-        case 'run_project':
-          return await this.handleRunProject(request.params.arguments);
-        case 'run_scene':
-          return await this.handleRunScene(request.params.arguments);
-        case 'get_debug_output':
-          return await this.handleGetDebugOutput();
-        case 'stop_project':
-          return await this.handleStopProject();
-        case 'run_gut_tests':
-          return await this.handleRunGutTests(request.params.arguments);
-        case 'capture_screenshot':
-          return await this.handleCaptureScreenshot(request.params.arguments);
-        case 'simulate_input':
-          return await this.handleSimulateInput(request.params.arguments);
-        case 'get_godot_version':
-          return await this.handleGetGodotVersion();
-        case 'list_projects':
-          return await this.handleListProjects(request.params.arguments);
-        case 'get_project_info':
-          return await this.handleGetProjectInfo(request.params.arguments);
-        case 'create_scene':
-          return await this.handleCreateScene(request.params.arguments);
-        case 'add_node':
-          return await this.handleAddNode(request.params.arguments);
-        case 'load_sprite':
-          return await this.handleLoadSprite(request.params.arguments);
-        case 'export_mesh_library':
-          return await this.handleExportMeshLibrary(request.params.arguments);
-        case 'save_scene':
-          return await this.handleSaveScene(request.params.arguments);
-        case 'get_uid':
-          return await this.handleGetUid(request.params.arguments);
-        case 'update_project_uids':
-          return await this.handleUpdateProjectUids(request.params.arguments);
-        case 'view_log':
-          return await this.handleViewLog(request.params.arguments);
-        case 'quit_godot':
-          return await this.handleQuitGodot();
-        default:
-          throw new McpError(
-            ErrorCode.MethodNotFound,
-            `Unknown tool: ${request.params.name}`
-          );
-      }
-    });
+    this.server.registerTool(
+      'run_project',
+      {
+        description: 'Run the Godot project and capture output. Starting a run stops the previous one. The game runs with Godot\'s local debugger, so a runtime script error pauses it at a "debug>" prompt that get_debug_output shows.',
+        inputSchema: runProjectSchema,
+      },
+      (args) => this.handleRunProject(args)
+    );
+
+    this.server.registerTool(
+      'run_scene',
+      {
+        description: 'Run a specific Godot scene and capture output. Starting a run stops the previous one. The game runs with Godot\'s local debugger, so a runtime script error pauses it at a "debug>" prompt that get_debug_output shows.',
+        inputSchema: runSceneSchema,
+      },
+      (args) => this.handleRunScene(args)
+    );
+
+    this.server.registerTool(
+      'capture_screenshot',
+      {
+        description: 'Capture a PNG of what the game started by run_project or run_scene is rendering right now, returned as an image. The image is in the game\'s viewport coordinates, the ones node positions use, so with stretch mode canvas_items or viewport it has the project\'s base size whatever the window size. Fails for a headless game or a window that is minimized, hidden or covered, and times out while a script error holds the game at a "debug>" prompt.',
+        inputSchema: captureScreenshotSchema,
+      },
+      (args) => this.handleCaptureScreenshot(args)
+    );
+
+    this.server.registerTool(
+      'simulate_input',
+      {
+        description: 'Send mouse, keyboard and input action events to the game started by run_project or run_scene, one command after another, and return the screenshots taken along the way. Positions are in the game\'s viewport coordinates, the same pixels capture_screenshot returns. The sequence stops at the first command that fails.',
+        inputSchema: simulateInputSchema,
+      },
+      (args) => this.handleSimulateInput(args)
+    );
+
+    this.server.registerTool(
+      'get_debug_output',
+      {
+        description: 'Get the output, errors and status of the last run_project or run_scene process. Works while it runs and after it exits, crashes or times out, until the next run or stop_project. Keeps the last 1000 lines of each stream.',
+      },
+      () => this.handleGetDebugOutput()
+    );
+
+    this.server.registerTool(
+      'stop_project',
+      {
+        description: 'Stop the Godot process started by run_project or run_scene and return its final output',
+      },
+      () => this.handleStopProject()
+    );
+
+    this.server.registerTool(
+      'run_gut_tests',
+      {
+        description: 'Run GUT tests (res://addons/gut/gut_cmdln.gd) and wait for the result. With no test or dir it runs what .gutconfig.json lists. Passing test runs only those scripts. Fails when GUT reports failures or exits non-zero.',
+        inputSchema: runGutTestsSchema,
+      },
+      (args) => this.handleRunGutTests(args)
+    );
+
+    this.server.registerTool(
+      'get_godot_version',
+      {
+        description: 'Get the installed Godot version',
+      },
+      () => this.handleGetGodotVersion()
+    );
+
+    this.server.registerTool(
+      'list_projects',
+      {
+        description: 'List Godot projects in a directory',
+        inputSchema: listProjectsSchema,
+      },
+      (args) => this.handleListProjects(args)
+    );
+
+    this.server.registerTool(
+      'get_project_info',
+      {
+        description: 'Retrieve metadata about a Godot project',
+        inputSchema: getProjectInfoSchema,
+      },
+      (args) => this.handleGetProjectInfo(args)
+    );
+
+    this.server.registerTool(
+      'create_scene',
+      {
+        description: 'Create a new Godot scene file',
+        inputSchema: createSceneSchema,
+      },
+      (args) => this.handleCreateScene(args)
+    );
+
+    this.server.registerTool(
+      'add_node',
+      {
+        description: 'Add a node to an existing scene',
+        inputSchema: addNodeSchema,
+      },
+      (args) => this.handleAddNode(args)
+    );
+
+    this.server.registerTool(
+      'load_sprite',
+      {
+        description: 'Load a sprite into a Sprite2D node',
+        inputSchema: loadSpriteSchema,
+      },
+      (args) => this.handleLoadSprite(args)
+    );
+
+    this.server.registerTool(
+      'export_mesh_library',
+      {
+        description: 'Export a scene as a MeshLibrary resource',
+        inputSchema: exportMeshLibrarySchema,
+      },
+      (args) => this.handleExportMeshLibrary(args)
+    );
+
+    this.server.registerTool(
+      'save_scene',
+      {
+        description: 'Save changes to a scene file',
+        inputSchema: saveSceneSchema,
+      },
+      (args) => this.handleSaveScene(args)
+    );
+
+    this.server.registerTool(
+      'get_uid',
+      {
+        description: 'Get the UID for a specific file in a Godot project (for Godot 4.4+)',
+        inputSchema: getUidSchema,
+      },
+      (args) => this.handleGetUid(args)
+    );
+
+    this.server.registerTool(
+      'update_project_uids',
+      {
+        description: 'Update UID references in a Godot project by resaving resources (for Godot 4.4+)',
+        inputSchema: updateProjectUidsSchema,
+      },
+      (args) => this.handleUpdateProjectUids(args)
+    );
+
+    this.server.registerTool(
+      'view_log',
+      {
+        description: 'View recent console output from the editor started by launch_editor, such as script parse errors. Returns the last N lines of captured stdout and stderr. For run_project and run_scene output use get_debug_output.',
+        inputSchema: viewLogSchema,
+      },
+      (args) => this.handleViewLog(args)
+    );
+
+    this.server.registerTool(
+      'quit_godot',
+      {
+        description: 'Close the Godot editor that was launched by this MCP server via launch_editor. Only closes editors spawned by this server. Unsaved changes in that editor are lost.',
+      },
+      () => this.handleQuitGodot()
+    );
   }
 
   /**
    * Handle the launch_editor tool
    * @param args Tool arguments
    */
-  private async handleLaunchEditor(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
+  private async handleLaunchEditor(args: LaunchEditorArgs) {
     if (!args.projectPath) {
       return this.createErrorResponse(
         'Project path is required',
@@ -1396,10 +1102,7 @@ class GodotServer {
    * Handle the run_project tool
    * @param args Tool arguments
    */
-  private async handleRunProject(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
+  private async handleRunProject(args: RunProjectArgs) {
     if (!args.projectPath) {
       return this.createErrorResponse(
         'Project path is required',
@@ -1428,20 +1131,29 @@ class GodotServer {
       }
 
       const userArgs = this.parseUserArgs(args.args);
-      if (!userArgs) {
-        return this.createErrorResponse(
-          'args must be an array of strings',
-          ['Pass game arguments such as ["--battle=1009"]']
-        );
-      }
 
       const embeddedProblem = this.embeddedOptionProblem(args.embedded, args.harness);
       if (embeddedProblem) {
         return this.createErrorResponse(embeddedProblem, ['Omit embedded to run the game in a normal window']);
       }
 
-      const scene = args.scene && this.validatePath(args.scene) ? args.scene : undefined;
-      if (scene) {
+      let scene: string | undefined;
+      if (args.scene) {
+        if (!this.validatePath(args.scene) || isAbsolute(args.scene)) {
+          return this.createErrorResponse(
+            'Invalid scene path',
+            ['Provide a res:// scene path or a path relative to the project without ".."']
+          );
+        }
+        if (!/\.(tscn|scn)$/i.test(args.scene)) {
+          return this.createErrorResponse(
+            'scene must point to a Godot scene file',
+            ['Provide a .tscn or .scn file']
+          );
+        }
+        // The scene goes on the Godot command line as a positional argument.
+        // The res:// prefix stops a value such as "--editor.tscn" from being read as an engine option.
+        scene = args.scene.startsWith('res://') ? args.scene : `res://${args.scene.split('\\').join('/')}`;
         this.logDebug(`Adding scene parameter: ${scene}`);
       }
 
@@ -1479,43 +1191,21 @@ class GodotServer {
    * Handle the run_scene tool
    * @param args Tool arguments
    */
-  private async handleRunScene(args: unknown) {
-    if (!args || typeof args !== 'object' || Array.isArray(args)) {
-      return this.createErrorResponse(
-        'Project path and scene path are required',
-        ['Provide projectPath and scenePath']
-      );
-    }
+  private async handleRunScene(args: RunSceneArgs) {
+    const { projectPath, scenePath } = args;
+    const timeoutMs = args.timeoutMs ?? DEFAULT_SCENE_TIMEOUT_MS;
 
-    const rawArgs = args as Record<string, unknown>;
-    const projectPath = rawArgs.projectPath ?? rawArgs.project_path;
-    const scenePath = rawArgs.scenePath ?? rawArgs.scene_path;
-    const rawTimeoutMs = rawArgs.timeoutMs ?? rawArgs.timeout_ms;
-    const timeoutMs = rawTimeoutMs === undefined ? DEFAULT_SCENE_TIMEOUT_MS : rawTimeoutMs;
-
-    if (typeof projectPath !== 'string' || !projectPath.trim()) {
+    if (!projectPath.trim()) {
       return this.createErrorResponse(
         'Project path is required',
         ['Provide a valid path to a Godot project directory']
       );
     }
 
-    if (typeof scenePath !== 'string' || !scenePath.trim()) {
+    if (!scenePath.trim()) {
       return this.createErrorResponse(
         'Scene path is required',
         ['Provide a res:// scene path or a path relative to the project']
-      );
-    }
-
-    if (
-      typeof timeoutMs !== 'number'
-      || !Number.isInteger(timeoutMs)
-      || timeoutMs <= 0
-      || timeoutMs > MAX_SCENE_TIMEOUT_MS
-    ) {
-      return this.createErrorResponse(
-        `timeoutMs must be an integer between 1 and ${MAX_SCENE_TIMEOUT_MS}`,
-        [`Provide timeoutMs in milliseconds, or omit it to use ${DEFAULT_SCENE_TIMEOUT_MS}`]
       );
     }
 
@@ -1540,15 +1230,9 @@ class GodotServer {
       );
     }
 
-    const userArgs = this.parseUserArgs(rawArgs.args);
-    if (!userArgs) {
-      return this.createErrorResponse(
-        'args must be an array of strings',
-        ['Pass game arguments such as ["--battle=1009"]']
-      );
-    }
+    const userArgs = this.parseUserArgs(args.args);
 
-    const embeddedProblem = this.embeddedOptionProblem(rawArgs.embedded, rawArgs.harness);
+    const embeddedProblem = this.embeddedOptionProblem(args.embedded, args.harness);
     if (embeddedProblem) {
       return this.createErrorResponse(embeddedProblem, ['Omit embedded to run the game in a normal window']);
     }
@@ -1583,8 +1267,8 @@ class GodotServer {
         projectPath,
         scene: godotScenePath,
         args: userArgs,
-        harness: rawArgs.harness !== false,
-        embedded: rawArgs.embedded === true,
+        harness: args.harness !== false,
+        embedded: args.embedded === true,
         timeoutMs,
       });
 
@@ -1592,7 +1276,7 @@ class GodotServer {
         content: [
           {
             type: 'text',
-            text: `Godot scene ${scenePath} started in debug mode. Use get_debug_output to see output or stop_project to stop it. The scene will stop automatically after ${timeoutMs} ms.${rawArgs.embedded === true ? NO_WINDOW_NOTE : ''}`,
+            text: `Godot scene ${scenePath} started in debug mode. Use get_debug_output to see output or stop_project to stop it. The scene will stop automatically after ${timeoutMs} ms.${args.embedded === true ? NO_WINDOW_NOTE : ''}`,
           },
         ],
       };
@@ -1610,16 +1294,12 @@ class GodotServer {
   }
 
   /**
-   * Check the optional args parameter of run_project and run_scene.
-   * Returns null when it is not an array of strings. A leading "--" is
-   * dropped because startGodotProcess adds its own.
+   * Return the game arguments of run_project and run_scene. A leading "--"
+   * is dropped because startGodotProcess adds its own.
    */
-  private parseUserArgs(value: unknown): string[] | null {
-    if (value === undefined || value === null) {
+  private parseUserArgs(value: string[] | undefined): string[] {
+    if (value === undefined) {
       return [];
-    }
-    if (!Array.isArray(value) || !value.every((arg) => typeof arg === 'string')) {
-      return null;
     }
     return value[0] === '--' ? value.slice(1) : [...value];
   }
@@ -1628,13 +1308,7 @@ class GodotServer {
    * Check the optional embedded parameter of run_project and run_scene.
    * Returns why it is refused, or null when it is fine.
    */
-  private embeddedOptionProblem(embedded: unknown, harness: unknown): string | null {
-    if (embedded === undefined) {
-      return null;
-    }
-    if (typeof embedded !== 'boolean') {
-      return 'embedded must be true or false';
-    }
+  private embeddedOptionProblem(embedded: boolean | undefined, harness: boolean | undefined): string | null {
     if (embedded && process.platform !== 'darwin') {
       return 'embedded only works on macOS';
     }
@@ -2026,13 +1700,10 @@ class GodotServer {
   /**
    * Handle the capture_screenshot tool
    */
-  private async handleCaptureScreenshot(args: any) {
-    args = this.normalizeParameters(args || {});
-
+  private async handleCaptureScreenshot(args: CaptureScreenshotArgs) {
     if (args.savePath !== undefined) {
       if (
-        typeof args.savePath !== 'string'
-        || !isAbsolute(args.savePath)
+        !isAbsolute(args.savePath)
         || !args.savePath.toLowerCase().endsWith('.png')
         || !this.validatePath(args.savePath)
         || !existsSync(dirname(args.savePath))
@@ -2081,30 +1752,9 @@ class GodotServer {
   /**
    * Handle the simulate_input tool
    */
-  private async handleSimulateInput(args: any) {
-    args = this.normalizeParameters(args || {});
-
+  private async handleSimulateInput(args: SimulateInputArgs) {
     const commands = args.commands;
-    if (
-      !Array.isArray(commands)
-      || commands.length === 0
-      || !commands.every(
-        (command) => command !== null && typeof command === 'object' && !Array.isArray(command) && typeof command.type === 'string'
-      )
-    ) {
-      return this.createErrorResponse('commands must be a non-empty list of objects that each have a type', [
-        'For example [{"type": "click", "x": 480, "y": 260}]',
-      ]);
-    }
-    if (args.warpMouse !== undefined && typeof args.warpMouse !== 'boolean') {
-      return this.createErrorResponse('warpMouse must be true or false', ['Omit it to leave the real cursor alone']);
-    }
     const timeoutMs = args.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS;
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_SCENE_TIMEOUT_MS) {
-      return this.createErrorResponse(`timeoutMs must be an integer between 1 and ${MAX_SCENE_TIMEOUT_MS}`, [
-        `Omit it to use ${DEFAULT_INPUT_TIMEOUT_MS}`,
-      ]);
-    }
 
     let response: HarnessResponse;
     try {
@@ -2151,15 +1801,13 @@ class GodotServer {
    * GUT splits list options on commas and cuts values at a second "=", so
    * entries containing either are refused instead of being misread.
    */
-  private parseGutPathList(value: unknown, field: string): { paths: string[] } | { error: string } {
-    if (value === undefined || value === null || value === '') {
+  private parseGutPathList(list: string[] | undefined, field: string): { paths: string[] } | { error: string } {
+    if (list === undefined) {
       return { paths: [] };
     }
-    const list = Array.isArray(value) ? value : [value];
     for (const item of list) {
       if (
-        typeof item !== 'string'
-        || !item.startsWith('res://')
+        !item.startsWith('res://')
         || !this.validatePath(item)
         || item.includes(',')
         || item.includes('=')
@@ -2167,15 +1815,13 @@ class GodotServer {
         return { error: `${field} entries must be res:// paths without "..", "," or "="` };
       }
     }
-    return { paths: list as string[] };
+    return { paths: list };
   }
 
   /**
    * Handle the run_gut_tests tool
    */
-  private async handleRunGutTests(args: any) {
-    args = this.normalizeParameters(args || {});
-
+  private async handleRunGutTests(args: RunGutTestsArgs) {
     if (!args.projectPath) {
       return this.createErrorResponse('Project path is required', [
         'Provide a valid path to a Godot project directory',
@@ -2196,9 +1842,8 @@ class GodotServer {
       );
     }
 
-    for (const field of ['unitTestName', 'select', 'innerClass']) {
-      const value = args[field];
-      if (value !== undefined && (typeof value !== 'string' || value.includes('='))) {
+    for (const field of ['unitTestName', 'select', 'innerClass'] as const) {
+      if (args[field]?.includes('=')) {
         return this.createErrorResponse(`${field} must be a string without "="`, [
           'GUT cuts option values at a second "="',
         ]);
@@ -2206,12 +1851,6 @@ class GodotServer {
     }
 
     const timeoutMs = args.timeoutMs ?? DEFAULT_GUT_TIMEOUT_MS;
-    if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_SCENE_TIMEOUT_MS) {
-      return this.createErrorResponse(
-        `timeoutMs must be an integer between 1 and ${MAX_SCENE_TIMEOUT_MS}`,
-        [`Omit it to use ${DEFAULT_GUT_TIMEOUT_MS}`]
-      );
-    }
 
     if (this.gutProcess) {
       return this.createErrorResponse('A GUT run is already in progress', [
@@ -2379,10 +2018,7 @@ class GodotServer {
   /**
    * Handle the list_projects tool
    */
-  private async handleListProjects(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
+  private async handleListProjects(args: ListProjectsArgs) {
     if (!args.directory) {
       return this.createErrorResponse(
         'Directory is required',
@@ -2493,10 +2129,7 @@ class GodotServer {
   /**
    * Handle the get_project_info tool
    */
-  private async handleGetProjectInfo(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
+  private async handleGetProjectInfo(args: GetProjectInfoArgs) {
     if (!args.projectPath) {
       return this.createErrorResponse(
         'Project path is required',
@@ -2593,10 +2226,7 @@ class GodotServer {
   /**
    * Handle the create_scene tool
    */
-  private async handleCreateScene(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
+  private async handleCreateScene(args: CreateSceneArgs) {
     if (!args.projectPath || !args.scenePath) {
       return this.createErrorResponse(
         'Project path and scene path are required',
@@ -2675,10 +2305,7 @@ class GodotServer {
   /**
    * Handle the add_node tool
    */
-  private async handleAddNode(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
+  private async handleAddNode(args: AddNodeArgs) {
     if (!args.projectPath || !args.scenePath || !args.nodeType || !args.nodeName) {
       return this.createErrorResponse(
         'Missing required parameters',
@@ -2786,10 +2413,7 @@ class GodotServer {
   /**
    * Handle the load_sprite tool
    */
-  private async handleLoadSprite(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
+  private async handleLoadSprite(args: LoadSpriteArgs) {
     if (!args.projectPath || !args.scenePath || !args.nodePath || !args.texturePath) {
       return this.createErrorResponse(
         'Missing required parameters',
@@ -2890,10 +2514,7 @@ class GodotServer {
   /**
    * Handle the export_mesh_library tool
    */
-  private async handleExportMeshLibrary(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
+  private async handleExportMeshLibrary(args: ExportMeshLibraryArgs) {
     if (!args.projectPath || !args.scenePath || !args.outputPath) {
       return this.createErrorResponse(
         'Missing required parameters',
@@ -2944,7 +2565,7 @@ class GodotServer {
       };
 
       // Add optional parameters
-      if (args.meshItemNames && Array.isArray(args.meshItemNames)) {
+      if (args.meshItemNames) {
         params.meshItemNames = args.meshItemNames;
       }
 
@@ -2985,10 +2606,7 @@ class GodotServer {
   /**
    * Handle the save_scene tool
    */
-  private async handleSaveScene(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
+  private async handleSaveScene(args: SaveSceneArgs) {
     if (!args.projectPath || !args.scenePath) {
       return this.createErrorResponse(
         'Missing required parameters',
@@ -3084,10 +2702,7 @@ class GodotServer {
   /**
    * Handle the get_uid tool
    */
-  private async handleGetUid(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
+  private async handleGetUid(args: GetUidArgs) {
     if (!args.projectPath || !args.filePath) {
       return this.createErrorResponse(
         'Missing required parameters',
@@ -3193,11 +2808,10 @@ class GodotServer {
   /**
    * Handle the view_log tool
    */
-  private async handleViewLog(args: any) {
-    args = this.normalizeParameters(args || {});
+  private async handleViewLog(args: ViewLogArgs) {
 
     let lineCount = 50; // default
-    if (args.lineCount !== undefined && typeof args.lineCount === 'number') {
+    if (args.lineCount !== undefined) {
       lineCount = Math.max(1, Math.min(1000, Math.floor(args.lineCount)));
     }
 
@@ -3206,7 +2820,7 @@ class GodotServer {
     return {
       content: [
         {
-          type: 'text',
+          type: 'text' as const,
           text: lines.length > 0 ? lines.join('\n') : '(no output captured yet)',
         },
       ],
@@ -3216,10 +2830,7 @@ class GodotServer {
   /**
    * Handle the update_project_uids tool
    */
-  private async handleUpdateProjectUids(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
+  private async handleUpdateProjectUids(args: UpdateProjectUidsArgs) {
     if (!args.projectPath) {
       return this.createErrorResponse(
         'Project path is required',
