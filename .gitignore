@@ -23,6 +23,10 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+*.xml
 
 # Coverage directory
 coverage/
+
+# Planning scratch index (issues are the record)
+tasks/
