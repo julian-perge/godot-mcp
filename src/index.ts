@@ -156,12 +156,12 @@ const simulateInputSchema = z.object({
     modifiers: z.array(z.enum(['shift', 'ctrl', 'alt', 'meta'])).optional(),
     action: z.string().optional().describe('Input action from the project\'s Input Map, or a built-in one such as "ui_accept"'),
     pressed: z.boolean().optional().describe('Press or release the action (default: true)'),
-    duration_ms: z.number().optional().describe('How long action_pulse holds the action, or how long wait waits (default: 100)'),
+    duration_ms: z.number().int().min(0).max(MAX_SCENE_TIMEOUT_MS).optional().describe('How long action_pulse holds the action, or how long wait waits (default: 100)'),
     text: z.string().optional().describe('Characters to type'),
-    delay_ms: z.number().optional().describe('Pause between typed characters (default: 50)'),
-  })).describe('Commands to run in order: click {x, y, button?, double?}, mouse_move {x, y}, mouse_drag {from_x, from_y, to_x, to_y, button?}, key {key, modifiers?}, action {action, pressed?}, action_pulse {action, duration_ms?}, text {text, delay_ms?}, wait {duration_ms?}, screenshot {}'),
+    delay_ms: z.number().int().min(0).max(MAX_SCENE_TIMEOUT_MS).optional().describe('Pause between typed characters (default: 50)'),
+  })).min(1).max(500).describe('Commands to run in order: click {x, y, button?, double?}, mouse_move {x, y}, mouse_drag {from_x, from_y, to_x, to_y, button?}, key {key, modifiers?}, action {action, pressed?}, action_pulse {action, duration_ms?}, text {text, delay_ms?}, wait {duration_ms?}, screenshot {}'),
   warpMouse: z.boolean().optional().describe('Optional: Also move the real mouse cursor to each position (default: false). Only needed when the game reads the cursor with get_global_mouse_position() or get_mouse_position(). It moves the cursor on the desktop.'),
-  timeoutMs: z.number().optional().describe('Optional: How long to wait for the whole sequence in milliseconds (default: 30000)'),
+  timeoutMs: z.number().int().min(1).max(MAX_SCENE_TIMEOUT_MS).optional().describe('Optional: How long to wait for the whole sequence in milliseconds (default: 30000)'),
 });
 type SimulateInputArgs = z.infer<typeof simulateInputSchema>;
 
@@ -1137,8 +1137,23 @@ class GodotServer {
         return this.createErrorResponse(embeddedProblem, ['Omit embedded to run the game in a normal window']);
       }
 
-      const scene = args.scene && this.validatePath(args.scene) ? args.scene : undefined;
-      if (scene) {
+      let scene: string | undefined;
+      if (args.scene) {
+        if (!this.validatePath(args.scene) || isAbsolute(args.scene)) {
+          return this.createErrorResponse(
+            'Invalid scene path',
+            ['Provide a res:// scene path or a path relative to the project without ".."']
+          );
+        }
+        if (!/\.(tscn|scn)$/i.test(args.scene)) {
+          return this.createErrorResponse(
+            'scene must point to a Godot scene file',
+            ['Provide a .tscn or .scn file']
+          );
+        }
+        // The scene goes on the Godot command line as a positional argument.
+        // The res:// prefix stops a value such as "--editor.tscn" from being read as an engine option.
+        scene = args.scene.startsWith('res://') ? args.scene : `res://${args.scene.split('\\').join('/')}`;
         this.logDebug(`Adding scene parameter: ${scene}`);
       }
 
@@ -1739,17 +1754,7 @@ class GodotServer {
    */
   private async handleSimulateInput(args: SimulateInputArgs) {
     const commands = args.commands;
-    if (commands.length === 0) {
-      return this.createErrorResponse('commands must be a non-empty list of objects that each have a type', [
-        'For example [{"type": "click", "x": 480, "y": 260}]',
-      ]);
-    }
     const timeoutMs = args.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS;
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_SCENE_TIMEOUT_MS) {
-      return this.createErrorResponse(`timeoutMs must be an integer between 1 and ${MAX_SCENE_TIMEOUT_MS}`, [
-        `Omit it to use ${DEFAULT_INPUT_TIMEOUT_MS}`,
-      ]);
-    }
 
     let response: HarnessResponse;
     try {

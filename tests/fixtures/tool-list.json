@@ -188,30 +188,38 @@
                 "description": "Press or release the action (default: true)"
               },
               "duration_ms": {
-                "type": "number",
-                "description": "How long action_pulse holds the action, or how long wait waits (default: 100)"
+                "type": "integer",
+                "description": "How long action_pulse holds the action, or how long wait waits (default: 100)",
+                "minimum": 0,
+                "maximum": 2147483647
               },
               "text": {
                 "type": "string",
                 "description": "Characters to type"
               },
               "delay_ms": {
-                "type": "number",
-                "description": "Pause between typed characters (default: 50)"
+                "type": "integer",
+                "description": "Pause between typed characters (default: 50)",
+                "minimum": 0,
+                "maximum": 2147483647
               }
             },
             "required": [
               "type"
             ]
-          }
+          },
+          "minItems": 1,
+          "maxItems": 500
         },
         "warpMouse": {
           "type": "boolean",
           "description": "Optional: Also move the real mouse cursor to each position (default: false). Only needed when the game reads the cursor with get_global_mouse_position() or get_mouse_position(). It moves the cursor on the desktop."
         },
         "timeoutMs": {
-          "type": "number",
-          "description": "Optional: How long to wait for the whole sequence in milliseconds (default: 30000)"
+          "type": "integer",
+          "description": "Optional: How long to wait for the whole sequence in milliseconds (default: 30000)",
+          "minimum": 1,
+          "maximum": 2147483647
         }
       },
       "required": [
