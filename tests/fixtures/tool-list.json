@@ -1,0 +1,559 @@
+[
+  {
+    "name": "launch_editor",
+    "description": "Launch Godot editor for a specific project",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        }
+      },
+      "required": [
+        "projectPath"
+      ]
+    }
+  },
+  {
+    "name": "run_project",
+    "description": "Run the Godot project and capture output. Starting a run stops the previous one. The game runs with Godot's local debugger, so a runtime script error pauses it at a \"debug>\" prompt that get_debug_output shows.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        },
+        "scene": {
+          "type": "string",
+          "description": "Optional: Specific scene to run"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional: Arguments for the game, e.g. [\"--battle=1009\"]. They are passed after \"--\", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options."
+        },
+        "harness": {
+          "type": "boolean",
+          "description": "Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type."
+        },
+        "embedded": {
+          "type": "boolean",
+          "description": "Optional: macOS only (default: false). Run the game with no window, through Godot's undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness."
+        }
+      },
+      "required": [
+        "projectPath"
+      ]
+    }
+  },
+  {
+    "name": "run_scene",
+    "description": "Run a specific Godot scene and capture output. Starting a run stops the previous one. The game runs with Godot's local debugger, so a runtime script error pauses it at a \"debug>\" prompt that get_debug_output shows.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        },
+        "scenePath": {
+          "type": "string",
+          "description": "Scene to run, as a res:// path or a path relative to the project"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "description": "Time in milliseconds before the scene is stopped automatically (default: 30000)",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional: Arguments for the game, e.g. [\"--battle=1009\"]. They are passed after \"--\", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options."
+        },
+        "harness": {
+          "type": "boolean",
+          "description": "Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type."
+        },
+        "embedded": {
+          "type": "boolean",
+          "description": "Optional: macOS only (default: false). Run the game with no window, through Godot's undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness."
+        }
+      },
+      "required": [
+        "projectPath",
+        "scenePath"
+      ]
+    }
+  },
+  {
+    "name": "capture_screenshot",
+    "description": "Capture a PNG of what the game started by run_project or run_scene is rendering right now, returned as an image. The image is in the game's viewport coordinates, the ones node positions use, so with stretch mode canvas_items or viewport it has the project's base size whatever the window size. Fails for a headless game or a window that is minimized, hidden or covered, and times out while a script error holds the game at a \"debug>\" prompt.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "savePath": {
+          "type": "string",
+          "description": "Optional: Absolute path of a .png file to also write the screenshot to"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "simulate_input",
+    "description": "Send mouse, keyboard and input action events to the game started by run_project or run_scene, one command after another, and return the screenshots taken along the way. Positions are in the game's viewport coordinates, the same pixels capture_screenshot returns. The sequence stops at the first command that fails.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "description": "Commands to run in order: click {x, y, button?, double?}, mouse_move {x, y}, mouse_drag {from_x, from_y, to_x, to_y, button?}, key {key, modifiers?}, action {action, pressed?}, action_pulse {action, duration_ms?}, text {text, delay_ms?}, wait {duration_ms?}, screenshot {}",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "click",
+                  "mouse_move",
+                  "mouse_drag",
+                  "key",
+                  "action",
+                  "action_pulse",
+                  "text",
+                  "wait",
+                  "screenshot"
+                ]
+              },
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "from_x": {
+                "type": "number"
+              },
+              "from_y": {
+                "type": "number"
+              },
+              "to_x": {
+                "type": "number"
+              },
+              "to_y": {
+                "type": "number"
+              },
+              "button": {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right",
+                  "middle"
+                ],
+                "description": "Mouse button (default: left)"
+              },
+              "double": {
+                "type": "boolean",
+                "description": "Send a double click (default: false)"
+              },
+              "key": {
+                "type": "string",
+                "description": "Godot key name such as \"A\", \"Space\", \"Enter\", \"Escape\", \"Up\" or \"F5\". A name such as \"Ctrl+S\" also works."
+              },
+              "modifiers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "shift",
+                    "ctrl",
+                    "alt",
+                    "meta"
+                  ]
+                }
+              },
+              "action": {
+                "type": "string",
+                "description": "Input action from the project's Input Map, or a built-in one such as \"ui_accept\""
+              },
+              "pressed": {
+                "type": "boolean",
+                "description": "Press or release the action (default: true)"
+              },
+              "duration_ms": {
+                "type": "number",
+                "description": "How long action_pulse holds the action, or how long wait waits (default: 100)"
+              },
+              "text": {
+                "type": "string",
+                "description": "Characters to type"
+              },
+              "delay_ms": {
+                "type": "number",
+                "description": "Pause between typed characters (default: 50)"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        },
+        "warpMouse": {
+          "type": "boolean",
+          "description": "Optional: Also move the real mouse cursor to each position (default: false). Only needed when the game reads the cursor with get_global_mouse_position() or get_mouse_position(). It moves the cursor on the desktop."
+        },
+        "timeoutMs": {
+          "type": "number",
+          "description": "Optional: How long to wait for the whole sequence in milliseconds (default: 30000)"
+        }
+      },
+      "required": [
+        "commands"
+      ]
+    }
+  },
+  {
+    "name": "get_debug_output",
+    "description": "Get the output, errors and status of the last run_project or run_scene process. Works while it runs and after it exits, crashes or times out, until the next run or stop_project. Keeps the last 1000 lines of each stream.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "stop_project",
+    "description": "Stop the Godot process started by run_project or run_scene and return its final output",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "run_gut_tests",
+    "description": "Run GUT tests (res://addons/gut/gut_cmdln.gd) and wait for the result. With no test or dir it runs what .gutconfig.json lists. Passing test runs only those scripts. Fails when GUT reports failures or exits non-zero.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        },
+        "test": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional: res:// test scripts to run, e.g. [\"res://test/unit/test_battle.gd\"]. The .gutconfig.json dirs are skipped unless dir is also given."
+        },
+        "dir": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional: res:// directories to search for tests instead of the .gutconfig.json dirs, e.g. [\"res://test/unit\"]"
+        },
+        "unitTestName": {
+          "type": "string",
+          "description": "Optional: Only run tests whose name contains this text (-gunit_test_name)"
+        },
+        "select": {
+          "type": "string",
+          "description": "Optional: Only run scripts whose file name contains this text (-gselect)"
+        },
+        "innerClass": {
+          "type": "string",
+          "description": "Optional: Only run inner test classes whose name contains this text (-ginner_class)"
+        },
+        "includeSubdirs": {
+          "type": "boolean",
+          "description": "Optional: Search subdirectories of dir (default: true)"
+        },
+        "headless": {
+          "type": "boolean",
+          "description": "Optional: Run without a window (default: true). Use false for tests that need rendering."
+        },
+        "log": {
+          "type": "integer",
+          "description": "Optional: GUT log level 0-3",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "description": "Optional: Stop the run after this many milliseconds (default: 600000)",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      },
+      "required": [
+        "projectPath"
+      ]
+    }
+  },
+  {
+    "name": "get_godot_version",
+    "description": "Get the installed Godot version",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "list_projects",
+    "description": "List Godot projects in a directory",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string",
+          "description": "Directory to search for Godot projects"
+        },
+        "recursive": {
+          "type": "boolean",
+          "description": "Whether to search recursively (default: false)"
+        }
+      },
+      "required": [
+        "directory"
+      ]
+    }
+  },
+  {
+    "name": "get_project_info",
+    "description": "Retrieve metadata about a Godot project",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        }
+      },
+      "required": [
+        "projectPath"
+      ]
+    }
+  },
+  {
+    "name": "create_scene",
+    "description": "Create a new Godot scene file",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        },
+        "scenePath": {
+          "type": "string",
+          "description": "Path where the scene file will be saved (relative to project)"
+        },
+        "rootNodeType": {
+          "type": "string",
+          "description": "Type of the root node (e.g., Node2D, Node3D)"
+        }
+      },
+      "required": [
+        "projectPath",
+        "scenePath"
+      ]
+    }
+  },
+  {
+    "name": "add_node",
+    "description": "Add a node to an existing scene",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        },
+        "scenePath": {
+          "type": "string",
+          "description": "Path to the scene file (relative to project)"
+        },
+        "parentNodePath": {
+          "type": "string",
+          "description": "Path to the parent node (e.g., \"root\" or \"root/Player\")"
+        },
+        "nodeType": {
+          "type": "string",
+          "description": "Type of node to add (e.g., Sprite2D, CollisionShape2D)"
+        },
+        "nodeName": {
+          "type": "string",
+          "description": "Name for the new node"
+        },
+        "properties": {
+          "type": "object",
+          "description": "Optional properties to set on the node"
+        }
+      },
+      "required": [
+        "projectPath",
+        "scenePath",
+        "nodeType",
+        "nodeName"
+      ]
+    }
+  },
+  {
+    "name": "load_sprite",
+    "description": "Load a sprite into a Sprite2D node",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        },
+        "scenePath": {
+          "type": "string",
+          "description": "Path to the scene file (relative to project)"
+        },
+        "nodePath": {
+          "type": "string",
+          "description": "Path to the Sprite2D node (e.g., \"root/Player/Sprite2D\")"
+        },
+        "texturePath": {
+          "type": "string",
+          "description": "Path to the texture file (relative to project)"
+        }
+      },
+      "required": [
+        "projectPath",
+        "scenePath",
+        "nodePath",
+        "texturePath"
+      ]
+    }
+  },
+  {
+    "name": "export_mesh_library",
+    "description": "Export a scene as a MeshLibrary resource",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        },
+        "scenePath": {
+          "type": "string",
+          "description": "Path to the scene file (.tscn) to export"
+        },
+        "outputPath": {
+          "type": "string",
+          "description": "Path where the mesh library (.res) will be saved"
+        },
+        "meshItemNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional: Names of specific mesh items to include (defaults to all)"
+        }
+      },
+      "required": [
+        "projectPath",
+        "scenePath",
+        "outputPath"
+      ]
+    }
+  },
+  {
+    "name": "save_scene",
+    "description": "Save changes to a scene file",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        },
+        "scenePath": {
+          "type": "string",
+          "description": "Path to the scene file (relative to project)"
+        },
+        "newPath": {
+          "type": "string",
+          "description": "Optional: New path to save the scene to (for creating variants)"
+        }
+      },
+      "required": [
+        "projectPath",
+        "scenePath"
+      ]
+    }
+  },
+  {
+    "name": "get_uid",
+    "description": "Get the UID for a specific file in a Godot project (for Godot 4.4+)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        },
+        "filePath": {
+          "type": "string",
+          "description": "Path to the file (relative to project) for which to get the UID"
+        }
+      },
+      "required": [
+        "projectPath",
+        "filePath"
+      ]
+    }
+  },
+  {
+    "name": "update_project_uids",
+    "description": "Update UID references in a Godot project by resaving resources (for Godot 4.4+)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "description": "Path to the Godot project directory"
+        }
+      },
+      "required": [
+        "projectPath"
+      ]
+    }
+  },
+  {
+    "name": "view_log",
+    "description": "View recent console output from the editor started by launch_editor, such as script parse errors. Returns the last N lines of captured stdout and stderr. For run_project and run_scene output use get_debug_output.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "lineCount": {
+          "type": "number",
+          "description": "Number of trailing lines to return (default 50, max 1000)"
+        }
+      }
+    }
+  },
+  {
+    "name": "quit_godot",
+    "description": "Close the Godot editor that was launched by this MCP server via launch_editor. Only closes editors spawned by this server. Unsaved changes in that editor are lost.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+]
