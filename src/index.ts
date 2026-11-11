@@ -130,47 +130,7 @@ class GodotServer {
   // Harness requests run one at a time, so two tool calls never interleave
   private harnessQueue: Promise<unknown> = Promise.resolve();
 
-  /**
-   * Parameter name mappings between snake_case and camelCase
-   * This allows the server to accept both formats
-   */
-  private parameterMappings: Record<string, string> = {
-    'project_path': 'projectPath',
-    'scene_path': 'scenePath',
-    'root_node_type': 'rootNodeType',
-    'parent_node_path': 'parentNodePath',
-    'node_type': 'nodeType',
-    'node_name': 'nodeName',
-    'texture_path': 'texturePath',
-    'node_path': 'nodePath',
-    'output_path': 'outputPath',
-    'mesh_item_names': 'meshItemNames',
-    'new_path': 'newPath',
-    'file_path': 'filePath',
-    'directory': 'directory',
-    'recursive': 'recursive',
-    'scene': 'scene',
-    'line_count': 'lineCount',
-    'save_path': 'savePath',
-    'warp_mouse': 'warpMouse',
-    // GUT-related params
-    'unit_test_name': 'unitTestName',
-    'inner_class': 'innerClass',
-    'include_subdirs': 'includeSubdirs',
-    'timeout_ms': 'timeoutMs',
-  };
-
-  /**
-   * Reverse mapping from camelCase to snake_case
-   * Generated from parameterMappings for quick lookups
-   */
-  private reverseParameterMappings: Record<string, string> = {};
-
   constructor(config?: GodotServerConfig) {
-    // Initialize reverse parameter mappings
-    for (const [snakeCase, camelCase] of Object.entries(this.parameterMappings)) {
-      this.reverseParameterMappings[camelCase] = snakeCase;
-    }
     // Apply configuration if provided
     let debugMode = DEBUG_MODE;
     let godotDebugMode = GODOT_DEBUG_MODE;
@@ -492,39 +452,6 @@ class GodotServer {
   }
 
   /**
-   * Normalize parameters to camelCase format
-   * @param params Object with either snake_case or camelCase keys
-   * @returns Object with all keys in camelCase format
-   */
-  private normalizeParameters(params: OperationParams): OperationParams {
-    if (!params || typeof params !== 'object') {
-      return params;
-    }
-    
-    const result: OperationParams = {};
-    
-    for (const key in params) {
-      if (Object.prototype.hasOwnProperty.call(params, key)) {
-        let normalizedKey = key;
-        
-        // If the key is in snake_case, convert it to camelCase using our mapping
-        if (key.includes('_') && this.parameterMappings[key]) {
-          normalizedKey = this.parameterMappings[key];
-        }
-        
-        // Handle nested objects recursively
-        if (typeof params[key] === 'object' && params[key] !== null && !Array.isArray(params[key])) {
-          result[normalizedKey] = this.normalizeParameters(params[key] as OperationParams);
-        } else {
-          result[normalizedKey] = params[key];
-        }
-      }
-    }
-    
-    return result;
-  }
-
-  /**
    * Convert camelCase keys to snake_case
    * @param params Object with camelCase keys
    * @returns Object with snake_case keys
@@ -535,7 +462,7 @@ class GodotServer {
     for (const key in params) {
       if (Object.prototype.hasOwnProperty.call(params, key)) {
         // Convert camelCase to snake_case
-        const snakeKey = this.reverseParameterMappings[key] || key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+        const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
         
         // Handle nested objects recursively
         if (typeof params[key] === 'object' && params[key] !== null && !Array.isArray(params[key])) {
@@ -1009,9 +936,6 @@ class GodotServer {
    * @param args Tool arguments
    */
   private async handleLaunchEditor(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
     if (!args.projectPath) {
       return this.createErrorResponse(
         'Project path is required',
@@ -1130,9 +1054,6 @@ class GodotServer {
    * @param args Tool arguments
    */
   private async handleRunProject(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
     if (!args.projectPath) {
       return this.createErrorResponse(
         'Project path is required',
@@ -1221,9 +1142,9 @@ class GodotServer {
     }
 
     const rawArgs = args as Record<string, unknown>;
-    const projectPath = rawArgs.projectPath ?? rawArgs.project_path;
-    const scenePath = rawArgs.scenePath ?? rawArgs.scene_path;
-    const rawTimeoutMs = rawArgs.timeoutMs ?? rawArgs.timeout_ms;
+    const projectPath = rawArgs.projectPath;
+    const scenePath = rawArgs.scenePath;
+    const rawTimeoutMs = rawArgs.timeoutMs;
     const timeoutMs = rawTimeoutMs === undefined ? DEFAULT_SCENE_TIMEOUT_MS : rawTimeoutMs;
 
     if (typeof projectPath !== 'string' || !projectPath.trim()) {
@@ -1760,7 +1681,6 @@ class GodotServer {
    * Handle the capture_screenshot tool
    */
   private async handleCaptureScreenshot(args: any) {
-    args = this.normalizeParameters(args || {});
 
     if (args.savePath !== undefined) {
       if (
@@ -1815,7 +1735,6 @@ class GodotServer {
    * Handle the simulate_input tool
    */
   private async handleSimulateInput(args: any) {
-    args = this.normalizeParameters(args || {});
 
     const commands = args.commands;
     if (
@@ -1907,7 +1826,6 @@ class GodotServer {
    * Handle the run_gut_tests tool
    */
   private async handleRunGutTests(args: any) {
-    args = this.normalizeParameters(args || {});
 
     if (!args.projectPath) {
       return this.createErrorResponse('Project path is required', [
@@ -2113,9 +2031,6 @@ class GodotServer {
    * Handle the list_projects tool
    */
   private async handleListProjects(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
     if (!args.directory) {
       return this.createErrorResponse(
         'Directory is required',
@@ -2227,9 +2142,6 @@ class GodotServer {
    * Handle the get_project_info tool
    */
   private async handleGetProjectInfo(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
     if (!args.projectPath) {
       return this.createErrorResponse(
         'Project path is required',
@@ -2327,9 +2239,6 @@ class GodotServer {
    * Handle the create_scene tool
    */
   private async handleCreateScene(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
     if (!args.projectPath || !args.scenePath) {
       return this.createErrorResponse(
         'Project path and scene path are required',
@@ -2409,9 +2318,6 @@ class GodotServer {
    * Handle the add_node tool
    */
   private async handleAddNode(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
     if (!args.projectPath || !args.scenePath || !args.nodeType || !args.nodeName) {
       return this.createErrorResponse(
         'Missing required parameters',
@@ -2520,9 +2426,6 @@ class GodotServer {
    * Handle the load_sprite tool
    */
   private async handleLoadSprite(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
     if (!args.projectPath || !args.scenePath || !args.nodePath || !args.texturePath) {
       return this.createErrorResponse(
         'Missing required parameters',
@@ -2624,9 +2527,6 @@ class GodotServer {
    * Handle the export_mesh_library tool
    */
   private async handleExportMeshLibrary(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
     if (!args.projectPath || !args.scenePath || !args.outputPath) {
       return this.createErrorResponse(
         'Missing required parameters',
@@ -2719,9 +2619,6 @@ class GodotServer {
    * Handle the save_scene tool
    */
   private async handleSaveScene(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
     if (!args.projectPath || !args.scenePath) {
       return this.createErrorResponse(
         'Missing required parameters',
@@ -2818,9 +2715,6 @@ class GodotServer {
    * Handle the get_uid tool
    */
   private async handleGetUid(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
     if (!args.projectPath || !args.filePath) {
       return this.createErrorResponse(
         'Missing required parameters',
@@ -2927,7 +2821,6 @@ class GodotServer {
    * Handle the view_log tool
    */
   private async handleViewLog(args: any) {
-    args = this.normalizeParameters(args || {});
 
     let lineCount = 50; // default
     if (args.lineCount !== undefined && typeof args.lineCount === 'number') {
@@ -2950,9 +2843,6 @@ class GodotServer {
    * Handle the update_project_uids tool
    */
   private async handleUpdateProjectUids(args: any) {
-    // Normalize parameters to camelCase
-    args = this.normalizeParameters(args);
-    
     if (!args.projectPath) {
       return this.createErrorResponse(
         'Project path is required',
