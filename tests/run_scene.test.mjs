@@ -69,7 +69,8 @@ test('run_scene integrates with process and debug tools', {
         timeoutMs: 2147483648,
       },
     });
-    assert.match(getText(invalidTimeout), /timeoutMs must be an integer/);
+    assert.equal(invalidTimeout.isError, true);
+    assert.match(getText(invalidTimeout), /Input validation error: Invalid arguments for tool run_scene/);
 
     const missingScene = await client.callTool({
       name: 'run_scene',
@@ -151,7 +152,8 @@ test('run_scene with embedded runs a game with no window', {
     await client.connect(transport);
 
     const invalidEmbedded = await client.callTool({ name: 'run_scene', arguments: { ...scene, embedded: 'yes' } });
-    assert.match(getText(invalidEmbedded), /embedded must be true or false/);
+    assert.equal(invalidEmbedded.isError, true);
+    assert.match(getText(invalidEmbedded), /Input validation error: Invalid arguments for tool run_scene/);
 
     const withoutHarness = await client.callTool({ name: 'run_scene', arguments: { ...scene, embedded: true, harness: false } });
     assert.match(getText(withoutHarness), /embedded needs the harness/);

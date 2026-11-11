@@ -11,8 +11,9 @@ const fixturePath = join(process.cwd(), 'tests', 'fixtures', 'tool-list.json');
 
 // The fixture holds the tools/list output from before the move to McpServer
 // (issue #1). The Zod conversion adds $schema, leaves out an empty required
-// list and always writes properties, so both sides drop those differences
-// before the comparison.
+// list, always writes properties, and writes additionalProperties: {} for a
+// loose object. None of these change which input the schema accepts, so both
+// sides drop them before the comparison.
 function normalizeSchema(value) {
   if (Array.isArray(value)) {
     return value.map(normalizeSchema);
@@ -23,6 +24,11 @@ function normalizeSchema(value) {
   const result = {};
   for (const key of Object.keys(value).sort()) {
     if (key === '$schema') {
+      continue;
+    }
+    const isEmptySchema = typeof value[key] === 'object' && value[key] !== null
+      && Object.keys(value[key]).length === 0;
+    if (key === 'additionalProperties' && isEmptySchema) {
       continue;
     }
     result[key] = normalizeSchema(value[key]);
