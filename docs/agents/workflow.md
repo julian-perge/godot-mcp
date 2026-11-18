@@ -58,13 +58,13 @@ One task, one branch, one pull request. Branch: `<type>/<issue>-<slug>`. PR titl
 
 `/agent-skills:build auto` runs every task of one spec on one branch, `<type>/<source issue>-<slug>`, with one commit per task. Its pull request closes every task issue.
 
-Run the verify command from `AGENTS.md` (`Every task`) before each commit. Open the pull request and stop. The user merges.
+Run the verify command from `AGENTS.md` (`Every task`) before each commit. Open the pull request. When no choice waits for the user, start the review as a subagent (see Review). Otherwise stop. The user merges.
 
 ## Review
 
-Run the review in a new session, not in the build session. The command starts no subagent, so the build session would review its own work. Check out the PR branch first (`gh pr checkout <pr>`), because the command reviews staged changes or recent commits.
+The review runs in a context that did not write the code. When a build ends with no choice waiting for the user, the build session starts the review as one subagent and asks the user about the choices that the subagent returns. Otherwise run the review in a new session, not in the build session. Check out the PR branch first (`gh pr checkout <pr>`), because the command reviews staged changes or recent commits.
 
-Run `/agent-skills:review` on the branch. Give it the task issue and the spec file as the spec. Name `CODING_STANDARDS.md` as the standard when the repo has one, and `AGENTS.md` when it does not. The review does not read either on its own.
+In a new session, run `/agent-skills:review` on the branch. Give it the task issue and the spec file as the spec. Name `CODING_STANDARDS.md` as the standard when the repo has one, and `AGENTS.md` when it does not. The review does not read either on its own.
 
 Fix small findings in the review session. Start a new build session for large ones.
 
