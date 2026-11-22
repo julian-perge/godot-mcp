@@ -70,7 +70,7 @@ Errors:
 
 ### Window title
 
-When `GODOT_MCP_HARNESS_TITLE` is set and not empty, `_initialize` calls `DisplayServer.window_set_title` with it. When it is unset, the title stays the project's own.
+When `GODOT_MCP_HARNESS_TITLE` is set and not empty, `_initialize` sets `root.title` to it. When it is unset, the title stays the project's own. `root.title` sets the same window title as `DisplayServer.window_set_title`, and unlike that call it can be read back, so `inspect_node` on `/root` with `props: ["title"]` shows it.
 
 ## MCP tools
 
@@ -101,6 +101,7 @@ The tool descriptions say that both tools need a game started by `run_project` o
   - `inspect_tree` lists the visible Control and leaves out the hidden one, and `includeHidden: true` lists both.
   - `inspect_node` on the visible Control's bare name returns its `rect` and `center`, and `props: ["name"]` returns the name.
   - `inspect_node` on a missing name is an error that names the path.
+  - With `GODOT_MCP_HARNESS_TITLE` set in the server's environment, `inspect_node` on `/root` with `props: ["title"]` returns that title.
 - Prove each check can fail: break the visibility filter and the bare-name lookup in turn, and watch the matching assertion go red.
 
 ## Boundaries
