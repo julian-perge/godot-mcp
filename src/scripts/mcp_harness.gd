@@ -3,7 +3,15 @@ extends SceneTree
 ## passes this script to Godot with -s, so it runs as the game's main loop and
 ## nothing is installed into the project. The project's autoloads and scene load
 ## as usual, and the harness adds a TCP endpoint on 127.0.0.1 that
-## capture_screenshot and simulate_input talk to.
+## capture_screenshot, simulate_input, inspect_node and inspect_tree talk to.
+##
+## Besides input and screenshots, the node command reads one node of the scene
+## tree: its path, class and visibility, its rect for a Control, its position
+## for a Node2D, its text and the properties the request names. The tree command
+## lists the same facts for each node under one node. Neither changes the tree.
+##
+## When GODOT_MCP_HARNESS_TITLE is set and not empty, the harness gives the
+## window that title, in any build, so a launcher can mark the windows it starts.
 ##
 ## The endpoint only opens in a debug build and only when the server set
 ## GODOT_MCP_HARNESS_PORT and GODOT_MCP_HARNESS_TOKEN. Each request is one line
@@ -66,6 +74,11 @@ func _initialize() -> void:
 		var main_scene := str(ProjectSettings.get_setting("application/run/main_scene", ""))
 		if not main_scene.is_empty():
 			change_scene_to_file(main_scene)
+	# root.title sets the same window title as DisplayServer.window_set_title,
+	# and inspect_node can read it back.
+	var title := OS.get_environment("GODOT_MCP_HARNESS_TITLE")
+	if not title.is_empty():
+		root.title = title
 	if not OS.is_debug_build():
 		return
 	var port := OS.get_environment("GODOT_MCP_HARNESS_PORT").to_int()
@@ -198,6 +211,10 @@ func _run_command(client: Client, command: Dictionary, warp: bool) -> Dictionary
 			return await _text(client, command)
 		"wait":
 			return await _wait(command)
+		"node":
+			return _node(command)
+		"tree":
+			return _tree(command)
 		var other:
 			return {"error": "unknown command type: %s" % other}
 
@@ -402,6 +419,106 @@ func _wait(command: Dictionary) -> Dictionary:
 		return duration
 	await _sleep(duration)
 	return {}
+
+
+func _node(command: Dictionary) -> Dictionary:
+	var props = command.get("props", [])
+	if typeof(props) != TYPE_ARRAY or props.any(func(prop): return typeof(prop) != TYPE_STRING):
+		return {"error": "props must be a list of property names"}
+	var path := str(command.get("path", ""))
+	var node := _find_node(path)
+	if node == null:
+		return {"error": _no_node_error(path)}
+	var info := _describe(node)
+	if command.has("props"):
+		var values := {}
+		for prop in props:
+			values[prop] = var_to_str(node.get(prop))
+		info["props"] = values
+	return info
+
+
+func _tree(command: Dictionary) -> Dictionary:
+	var depth = command.get("depth", 3)
+	if not _is_number(depth) or depth < 0 or depth != floor(depth):
+		return {"error": "depth must be a whole number, 0 or more"}
+	var include_hidden = command.get("include_hidden", false)
+	if typeof(include_hidden) != TYPE_BOOL:
+		return {"error": "include_hidden must be true or false"}
+	var path := str(command.get("path", ""))
+	var start := _find_node(path)
+	if start == null:
+		return {"error": _no_node_error(path)}
+	var nodes := []
+	_walk(start, 0, int(depth), include_hidden, nodes)
+	return {
+		"scene": current_scene.scene_file_path if current_scene != null else "",
+		"root": str(current_scene.get_path()) if current_scene != null else "/root",
+		"nodes": nodes,
+	}
+
+
+func _walk(node: Node, level: int, depth: int, include_hidden: bool, nodes: Array) -> void:
+	if node is CanvasItem and not include_hidden and not (node as CanvasItem).is_visible_in_tree():
+		return
+	var entry := _describe(node)
+	entry["depth"] = level
+	nodes.append(entry)
+	if level >= depth:
+		return
+	for child in node.get_children():
+		_walk(child, level + 1, depth, include_hidden, nodes)
+
+
+# An empty path is the current scene, or the root when there is none, a path that starts with / is from the
+# root, and any other path is tried from the current scene, then from the root.
+# A bare name that none of these finds is searched for in the whole tree, and a
+# visible match wins, because a scene can hold several nodes with the same name,
+# such as a close button in each panel, while only one of them is on screen.
+func _find_node(path: String) -> Node:
+	if path.is_empty():
+		return current_scene if current_scene != null else root
+	if path.begins_with("/"):
+		return root.get_node_or_null(path)
+	var node: Node = null
+	if current_scene != null:
+		node = current_scene.get_node_or_null(path)
+	if node == null:
+		node = root.get_node_or_null(path)
+	if node != null or path.contains("/"):
+		return node
+	var matches := root.find_children(path, "", true, false)
+	for match_node in matches:
+		if not (match_node is CanvasItem) or (match_node as CanvasItem).is_visible_in_tree():
+			return match_node
+	return null if matches.is_empty() else matches[0]
+
+
+func _no_node_error(path: String) -> String:
+	if current_scene == null:
+		return "no node %s in no scene" % path
+	return "no node %s in the scene %s" % [path, current_scene.scene_file_path]
+
+
+# Rects and positions go through the canvas transform, which holds any Camera2D
+# and CanvasLayer offset, so they are the viewport coordinates that click and
+# screenshot use.
+func _describe(node: Node) -> Dictionary:
+	var info := {"path": str(node.get_path()), "class": node.get_class()}
+	if node is CanvasItem:
+		info["visible"] = (node as CanvasItem).is_visible_in_tree()
+	if node is Control:
+		var control := node as Control
+		var rect := control.get_global_transform_with_canvas() * Rect2(Vector2.ZERO, control.size)
+		var center := rect.get_center()
+		info["rect"] = [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
+		info["center"] = [center.x, center.y]
+	elif node is Node2D:
+		var position := (node as Node2D).get_global_transform_with_canvas().origin
+		info["position"] = [position.x, position.y]
+	if "text" in node:
+		info["text"] = str(node.get("text"))
+	return info
 
 
 # Moves the mouse to pos, given in viewport coordinates. Input events carry

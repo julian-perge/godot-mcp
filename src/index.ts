@@ -121,7 +121,7 @@ const runProjectSchema = z.object({
   projectPath: z.string().describe('Path to the Godot project directory'),
   scene: z.string().optional().describe('Optional: Specific scene to run'),
   args: z.array(z.string()).optional().describe('Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.'),
-  harness: z.boolean().optional().describe('Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.'),
+  harness: z.boolean().optional().describe('Optional: Run the game under the godot-mcp harness main loop so capture_screenshot, simulate_input, inspect_node and inspect_tree work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.'),
   embedded: z.boolean().optional().describe('Optional: macOS only (default: false). Run the game with no window, through Godot\'s undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness.'),
 });
 type RunProjectArgs = z.infer<typeof runProjectSchema>;
@@ -131,7 +131,7 @@ const runSceneSchema = z.object({
   scenePath: z.string().describe('Scene to run, as a res:// path or a path relative to the project'),
   timeoutMs: z.number().int().min(1).max(MAX_SCENE_TIMEOUT_MS).optional().describe('Time in milliseconds before the scene is stopped automatically (default: 30000)'),
   args: z.array(z.string()).optional().describe('Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.'),
-  harness: z.boolean().optional().describe('Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.'),
+  harness: z.boolean().optional().describe('Optional: Run the game under the godot-mcp harness main loop so capture_screenshot, simulate_input, inspect_node and inspect_tree work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.'),
   embedded: z.boolean().optional().describe('Optional: macOS only (default: false). Run the game with no window, through Godot\'s undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness.'),
 });
 type RunSceneArgs = z.infer<typeof runSceneSchema>;
@@ -164,6 +164,19 @@ const simulateInputSchema = z.object({
   timeoutMs: z.number().int().min(1).max(MAX_SCENE_TIMEOUT_MS).optional().describe('Optional: How long to wait for the whole sequence in milliseconds (default: 30000)'),
 });
 type SimulateInputArgs = z.infer<typeof simulateInputSchema>;
+
+const inspectNodeSchema = z.object({
+  path: z.string().describe('Node path relative to the current scene, an absolute path that starts with /root, or a bare node name, in which * and ? are wildcards'),
+  props: z.array(z.string()).optional().describe('Optional: Property names to read, returned as var_to_str text under props, e.g. ["name", "modulate"]'),
+});
+type InspectNodeArgs = z.infer<typeof inspectNodeSchema>;
+
+const inspectTreeSchema = z.object({
+  path: z.string().optional().describe('Optional: Node to start from, as in inspect_node (default: the current scene)'),
+  depth: z.number().int().min(0).max(20).optional().describe('Optional: How many levels below the start node to list (default: 3)'),
+  includeHidden: z.boolean().optional().describe('Optional: Also list hidden CanvasItems and their children (default: false)'),
+});
+type InspectTreeArgs = z.infer<typeof inspectTreeSchema>;
 
 const runGutTestsSchema = z.object({
   projectPath: z.string().describe('Path to the Godot project directory'),
@@ -846,6 +859,24 @@ class GodotServer {
         inputSchema: simulateInputSchema,
       },
       (args) => this.handleSimulateInput(args)
+    );
+
+    this.server.registerTool(
+      'inspect_node',
+      {
+        description: 'Read one node of the game started by run_project or run_scene with the harness on. path is a node path relative to the current scene, an absolute path that starts with /root, or a bare node name, which finds the first match in the tree and prefers a visible one. Returns the node\'s path, class and visibility, its rect and center for a Control, its position for a Node2D, its text when it has one, and the props you name. Positions are in the game\'s viewport coordinates, so a center is a point that simulate_input can click.',
+        inputSchema: inspectNodeSchema,
+      },
+      (args) => this.handleInspectNode(args)
+    );
+
+    this.server.registerTool(
+      'inspect_tree',
+      {
+        description: 'List the nodes under one node of the game started by run_project or run_scene with the harness on. path works as in inspect_node and defaults to the current scene. A CanvasItem that is not visible is left out with its children, unless includeHidden is true. Each entry has the keys of inspect_node except props, plus its depth below the start node. Positions are in the game\'s viewport coordinates.',
+        inputSchema: inspectTreeSchema,
+      },
+      (args) => this.handleInspectTree(args)
     );
 
     this.server.registerTool(
@@ -1794,6 +1825,59 @@ class GodotServer {
     const shotText = screenshots > 0 ? ` The ${screenshots} screenshot(s) are in viewport coordinates.` : '';
     content.push({ type: 'text', text: `Ran ${commands.length} command(s).${shotText}` });
     return { content };
+  }
+
+  /**
+   * Handle the inspect_node tool
+   */
+  private async handleInspectNode(args: InspectNodeArgs) {
+    const command: Record<string, unknown> = { type: 'node', path: args.path };
+    if (args.props !== undefined) {
+      command.props = args.props;
+    }
+    return this.runInspectCommand(command);
+  }
+
+  /**
+   * Handle the inspect_tree tool
+   */
+  private async handleInspectTree(args: InspectTreeArgs) {
+    const command: Record<string, unknown> = { type: 'tree' };
+    if (args.path !== undefined) {
+      command.path = args.path;
+    }
+    if (args.depth !== undefined) {
+      command.depth = args.depth;
+    }
+    if (args.includeHidden !== undefined) {
+      command.include_hidden = args.includeHidden;
+    }
+    return this.runInspectCommand(command);
+  }
+
+  /**
+   * Send one node or tree command and answer with its result as JSON
+   */
+  private async runInspectCommand(command: Record<string, unknown>) {
+    let response: HarnessResponse;
+    try {
+      response = await this.requestHarness([command], 15000);
+    } catch (error: any) {
+      return this.createErrorResponse(`Failed to inspect the game: ${error?.message || 'Unknown error'}`, [
+        'Start the game with run_project or run_scene first',
+        'Check get_debug_output for "[godot-mcp harness] listening on" to confirm the harness started',
+      ]);
+    }
+
+    const result = response.results?.[0];
+    if (!response.ok || !result) {
+      return {
+        content: [{ type: 'text' as const, text: result?.error ?? response.error ?? 'The harness gave no result' }],
+        isError: true,
+      };
+    }
+    const { type: _type, ...info } = result;
+    return { content: [{ type: 'text' as const, text: JSON.stringify(info) }] };
   }
 
   /**

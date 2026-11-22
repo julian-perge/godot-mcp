@@ -20,11 +20,11 @@ function getText(result) {
   return textContent.text;
 }
 
-function connectClient() {
+function connectClient(env = {}) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [path.join(repositoryPath, 'build', 'index.js')],
-    env: { ...process.env, GODOT_PATH: godotPath },
+    env: { ...process.env, GODOT_PATH: godotPath, ...env },
   });
   const client = new Client(
     { name: 'run-scene-integration-test', version: '1.0.0' },
@@ -139,6 +139,135 @@ test('run_scene integrates with process and debug tools', {
     }
     await client.close();
   }
+});
+
+test('inspect_node and inspect_tree read nodes of the running scene', {
+  skip: skipReason,
+  timeout: 60000,
+}, async () => {
+  const { client, transport } = connectClient();
+  const inspectNode = (args) => client.callTool({ name: 'inspect_node', arguments: args });
+  const readNode = async (args) => {
+    const result = await inspectNode(args);
+    assert.notEqual(result.isError, true, getText(result));
+    return JSON.parse(getText(result));
+  };
+  const inspectTree = async (args) => {
+    const result = await client.callTool({ name: 'inspect_tree', arguments: args });
+    assert.notEqual(result.isError, true, getText(result));
+    return JSON.parse(getText(result));
+  };
+
+  try {
+    await client.connect(transport);
+    await client.callTool({
+      name: 'run_scene',
+      arguments: { projectPath: fixturePath, scenePath: 'res://tests/smoke_test.tscn' },
+    });
+    await waitForDebugOutput(client, 'RUN_SCENE_TEST_OK');
+
+    const labelInfo = await readNode({ path: 'VisibleLabel', props: ['name'] });
+    assert.equal(labelInfo.path, '/root/SmokeTest/VisibleLabel');
+    assert.equal(labelInfo.class, 'Label');
+    assert.equal(labelInfo.visible, true);
+    assert.deepEqual(labelInfo.rect, [10, 20, 100, 30]);
+    assert.deepEqual(labelInfo.center, [60, 35]);
+    assert.equal(labelInfo.text, 'Hello');
+    assert.equal(labelInfo.props.name, '&"VisibleLabel"');
+
+    const marker = await readNode({ path: '/root/SmokeTest/Marker' });
+    assert.equal(marker.class, 'Node2D');
+    assert.deepEqual(marker.position, [40, 50]);
+    assert.equal('rect' in marker, false);
+    assert.equal('props' in marker, false);
+
+    // The scene has a CloseButton in a hidden panel first and one in a shown
+    // panel second, so a bare name has to skip the hidden one.
+    const closeButton = await readNode({ path: 'CloseButton' });
+    assert.equal(closeButton.path, '/root/SmokeTest/ShownPanel/CloseButton');
+    assert.equal(closeButton.visible, true);
+
+    const hiddenButton = await readNode({ path: 'HiddenPanel/CloseButton' });
+    assert.equal(hiddenButton.visible, false);
+
+    // The CanvasLayer offset of (30, 40) moves where its children are drawn,
+    // so the answer has to include it to be a point that click can use.
+    const layerLabel = await readNode({ path: 'LayerLabel' });
+    assert.deepEqual(layerLabel.rect, [40, 60, 100, 30]);
+    assert.deepEqual(layerLabel.center, [90, 75]);
+    const layerMarker = await readNode({ path: 'LayerMarker' });
+    assert.deepEqual(layerMarker.position, [35, 45]);
+
+    const missing = await inspectNode({ path: 'NoSuchNode' });
+    assert.equal(missing.isError, true);
+    assert.match(getText(missing), /no node NoSuchNode in the scene res:\/\/tests\/smoke_test\.tscn/);
+
+    const tree = await inspectTree({});
+    assert.equal(tree.scene, 'res://tests/smoke_test.tscn');
+    assert.equal(tree.root, '/root/SmokeTest');
+    assert.deepEqual(tree.nodes[0], { path: '/root/SmokeTest', class: 'Node', depth: 0 });
+    const treeLabel = tree.nodes.find((node) => node.path === '/root/SmokeTest/VisibleLabel');
+    const { props: _labelProps, ...labelKeys } = labelInfo;
+    assert.deepEqual(treeLabel, { ...labelKeys, depth: 1 });
+    const treePaths = tree.nodes.map((node) => node.path);
+    assert.equal(treePaths.includes('/root/SmokeTest/HiddenPanel'), false);
+    assert.equal(treePaths.includes('/root/SmokeTest/HiddenPanel/HiddenLabel'), false);
+
+    const fullTree = await inspectTree({ includeHidden: true });
+    const fullPaths = fullTree.nodes.map((node) => node.path);
+    assert.ok(fullPaths.includes('/root/SmokeTest/HiddenPanel'));
+    assert.ok(fullPaths.includes('/root/SmokeTest/HiddenPanel/HiddenLabel'));
+
+    const panel = await inspectTree({ path: 'ShownPanel', depth: 0 });
+    assert.deepEqual(panel.nodes.map((node) => node.path), ['/root/SmokeTest/ShownPanel']);
+    const panelChildren = await inspectTree({ path: 'ShownPanel' });
+    assert.deepEqual(panelChildren.nodes.map((node) => [node.path, node.depth]), [
+      ['/root/SmokeTest/ShownPanel', 0],
+      ['/root/SmokeTest/ShownPanel/CloseButton', 1],
+    ]);
+
+    const missingTree = await client.callTool({ name: 'inspect_tree', arguments: { path: 'NoSuchNode' } });
+    assert.equal(missingTree.isError, true);
+    assert.match(getText(missingTree), /no node NoSuchNode in the scene/);
+  } finally {
+    try {
+      await client.callTool({ name: 'stop_project', arguments: {} });
+    } catch {
+      // The process may already be stopped or the transport may already be closed.
+    }
+    await client.close();
+  }
+});
+
+test('GODOT_MCP_HARNESS_TITLE sets the window title of the running game', {
+  skip: skipReason,
+  timeout: 60000,
+}, async () => {
+  const readTitle = async (env) => {
+    const { client, transport } = connectClient(env);
+    try {
+      await client.connect(transport);
+      await client.callTool({
+        name: 'run_scene',
+        arguments: { projectPath: fixturePath, scenePath: 'res://tests/smoke_test.tscn' },
+      });
+      await waitForDebugOutput(client, 'RUN_SCENE_TEST_OK');
+      const result = await client.callTool({ name: 'inspect_node', arguments: { path: '/root', props: ['title'] } });
+      assert.notEqual(result.isError, true, getText(result));
+      return JSON.parse(getText(result)).props.title;
+    } finally {
+      try {
+        await client.callTool({ name: 'stop_project', arguments: {} });
+      } catch {
+        // The process may already be stopped or the transport may already be closed.
+      }
+      await client.close();
+    }
+  };
+
+  assert.equal(await readTitle({ GODOT_MCP_HARNESS_TITLE: 'AGENT VERIFY - test' }), '"AGENT VERIFY - test"');
+  // An empty variable counts as unset, so the title stays the project's name.
+  assert.equal(await readTitle({ GODOT_MCP_HARNESS_TITLE: '' }), '"Run Scene MCP Test"');
 });
 
 test('run_scene with embedded runs a game with no window', {

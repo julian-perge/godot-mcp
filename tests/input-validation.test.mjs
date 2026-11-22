@@ -117,6 +117,37 @@ test('simulate_input arguments out of range fail input validation', async () => 
   });
 });
 
+test('inspect_node arguments of the wrong type fail input validation', async () => {
+  await withProject(async (client) => {
+    const cases = [
+      {},
+      { path: 'Button', props: 'name' },
+      { path: 'Button', props: [1] },
+    ];
+    for (const args of cases) {
+      const result = await client.callTool({ name: 'inspect_node', arguments: args });
+      assert.equal(result.isError, true, JSON.stringify(args));
+      assert.match(result.content[0].text, /Input validation error/, JSON.stringify(args));
+    }
+  });
+});
+
+test('inspect_tree arguments out of range fail input validation', async () => {
+  await withProject(async (client) => {
+    const cases = [
+      { depth: 21 },
+      { depth: -1 },
+      { depth: 1.5 },
+      { includeHidden: 'yes' },
+    ];
+    for (const args of cases) {
+      const result = await client.callTool({ name: 'inspect_tree', arguments: args });
+      assert.equal(result.isError, true, JSON.stringify(args));
+      assert.match(result.content[0].text, /Input validation error/, JSON.stringify(args));
+    }
+  });
+});
+
 test('run_project rejects a scene that is not a project scene file', async () => {
   await withProject(async (client, projectPath) => {
     const cases = [

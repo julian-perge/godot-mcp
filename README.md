@@ -67,6 +67,7 @@ Godot MCP enables AI agents to launch the Godot editor, run projects, capture de
 - **Capture Debug Output**: Retrieve console output and error messages
 - **Capture Screenshots**: Return a PNG of the running game to the agent, so it can check what the player sees
 - **Simulate Input**: Click, drag, type, press keys and fire input actions in the running game
+- **Inspect Nodes**: Read the position, size, text and properties of a node in the running game, or list the nodes under one
 - **Control Execution**: Start and stop Godot projects programmatically
 - **Get Godot Version**: Retrieve the installed Godot version
 - **List Godot Projects**: Find Godot projects in a specified directory
@@ -153,6 +154,82 @@ A game that runs headless draws nothing, so the call fails. Godot also stops dra
 Events go through `Input.parse_input_event()`, so the game gets them like real input. GUI controls react, actions bound to a key fire, and `_input` and `_unhandled_input` receive them. The `action` commands send `InputEventAction` events. The sequence stops at the first command that fails and says which one. `timeoutMs` (default `30000`) covers the whole sequence, and when it runs out the harness drops the remaining commands instead of sending them late, and the next request can run.
 
 The real mouse cursor stays put unless you pass `warpMouse: true`. Clicks, drags and GUI hover work without it, but `get_global_mouse_position()` and `get_mouse_position()` read the real cursor, so a game that aims or hovers with those needs it. Warping moves the cursor on your desktop. A game started with `embedded: true` follows the injected position in those calls and needs no warp.
+
+### Inspect Nodes
+
+`inspect_node` reads one node of the game started by `run_project` or `run_scene`, and `inspect_tree` lists the nodes under one node. Both go through the harness and change nothing in the game. With them an agent can find a control by its name and click its center, instead of reading coordinates off a screenshot.
+
+| Tool | Arguments |
+| --- | --- |
+| `inspect_node` | `path` (required), and `props`, a list of property names to read |
+| `inspect_tree` | `path` (default: the current scene), `depth` from `0` to `20` (default `3`), and `includeHidden` (default `false`) |
+
+`path` resolves in this order:
+
+1. An empty path is the current scene, or the root when there is no current scene.
+2. A path that starts with `/` is an absolute path, such as `/root/Main/Menu`.
+3. Any other path is relative to the current scene, then relative to the root.
+4. A bare name with no `/` that steps 1 to 3 did not find is searched for in the whole tree. The first visible match wins. When no match is visible, the first match wins. A scene can hold several nodes with the same name, such as a close button in each panel, and this step finds the one on screen. The name can hold the wildcards `*` and `?`, so `Close*` matches `CloseButton`.
+
+```json
+{ "path": "StartButton", "props": ["disabled"] }
+```
+
+```json
+{
+  "path": "/root/Main/Menu/StartButton",
+  "class": "Button",
+  "visible": true,
+  "rect": [440, 300, 120, 40],
+  "center": [500, 320],
+  "text": "Start",
+  "props": { "disabled": "false" }
+}
+```
+
+| Key | When | Value |
+| --- | --- | --- |
+| `path`, `class` | always | The node path and the engine class |
+| `visible` | CanvasItem | `is_visible_in_tree()` |
+| `rect`, `center` | Control | `[x, y, w, h]` of the node's rect on screen, and `[x, y]` of its center |
+| `position` | Node2D | `[x, y]` of the node's origin on screen |
+| `text` | the node has a `text` property | The text |
+| `props` | `props` was given | Each name with its value as `var_to_str()` text |
+
+Rects and positions are in the game's viewport coordinates, the same ones `click` and `capture_screenshot` use, so a `center` is a point that `simulate_input` can click. They include any Camera2D and CanvasLayer transform. For a node inside a SubViewport they are in that SubViewport's own coordinates, so they match `click` only when the SubViewport fills the window at its own size.
+
+`inspect_tree` answers with the scene file, the current scene's path and the nodes in tree order. Each entry has the keys above except `props`, plus `depth`, its level below the start node. A CanvasItem that is not visible is left out with its children, unless `includeHidden` is true.
+
+```json
+{
+  "scene": "res://main.tscn",
+  "root": "/root/Main",
+  "nodes": [
+    { "path": "/root/Main", "class": "Node2D", "visible": true, "position": [0, 0], "depth": 0 },
+    { "path": "/root/Main/Menu", "class": "VBoxContainer", "visible": true, "rect": [420, 280, 160, 120], "center": [500, 340], "depth": 1 }
+  ]
+}
+```
+
+A node that is not found gives an error result such as `no node StartButton in the scene res://main.tscn`. With `harness: false` both tools refuse to run, like `capture_screenshot` and `simulate_input`.
+
+#### From a launcher of its own
+
+The tools reach only the game that the server started. A script that starts the game itself can send the same `node` and `tree` commands to the harness over TCP:
+
+1. Start a debug build of Godot with `-s /path/to/godot-mcp/src/scripts/mcp_harness.gd`, and set `GODOT_MCP_HARNESS_PORT` to a free port and `GODOT_MCP_HARNESS_TOKEN` to a random string. Set `GODOT_MCP_HARNESS_TITLE` too to give the window a title of its own. Use the `src/` copy: it is tracked, so a clone or a git submodule has it before any build, and `bun run build` copies it to `build/scripts/` unchanged.
+2. Wait for `[godot-mcp harness] listening on 127.0.0.1:<port>` in the game's output.
+3. Connect to `127.0.0.1:<port>`, send one line of JSON, and read one line of JSON back. The harness closes the connection after each answer.
+
+```json
+{"token": "<token>", "commands": [{"type": "node", "path": "StartButton"}, {"type": "tree", "path": "Menu", "depth": 1, "include_hidden": false}]}
+```
+
+```json
+{"ok": true, "results": [{"type": "node", "path": "/root/Main/Menu/StartButton", "class": "Button", "visible": true, "rect": [440.0, 300.0, 120.0, 40.0], "center": [500.0, 320.0], "text": "Start"}, {"type": "tree", "scene": "res://main.tscn", "root": "/root/Main", "nodes": [...]}]}
+```
+
+The fields are the ones above, but the hidden-node flag is `include_hidden` on the wire. The commands run in order, and one request can mix them with the `simulate_input` commands, such as a `tree` and then a `click`. The run stops at the first command that fails: its result holds `error`, and `ok` is `false`.
 
 ### Run Without a Window
 
@@ -315,6 +392,7 @@ For any MCP-compatible client, use this configuration:
 |----------|-------------|
 | `GODOT_PATH` | Path to the Godot executable (overrides automatic detection) |
 | `DEBUG` | Set to `"true"` to enable detailed server-side debug logging |
+| `GODOT_MCP_HARNESS_TITLE` | The window title of a game that runs under the harness. The harness reads it, and the server passes its own environment to the game, so it works for `run_project`, `run_scene` and a launcher of its own. When it is unset or empty, the title stays the project's own |
 
 <details>
 <summary><strong>Building from Source</strong></summary>
