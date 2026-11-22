@@ -165,6 +165,12 @@ const simulateInputSchema = z.object({
 });
 type SimulateInputArgs = z.infer<typeof simulateInputSchema>;
 
+const inspectNodeSchema = z.object({
+  path: z.string().describe('Node path relative to the current scene, an absolute path that starts with /root, or a bare node name'),
+  props: z.array(z.string()).optional().describe('Optional: Property names to read, returned as var_to_str text under props, e.g. ["name", "modulate"]'),
+});
+type InspectNodeArgs = z.infer<typeof inspectNodeSchema>;
+
 const runGutTestsSchema = z.object({
   projectPath: z.string().describe('Path to the Godot project directory'),
   test: z.array(z.string()).optional().describe('Optional: res:// test scripts to run, e.g. ["res://test/unit/test_battle.gd"]. The .gutconfig.json dirs are skipped unless dir is also given.'),
@@ -846,6 +852,15 @@ class GodotServer {
         inputSchema: simulateInputSchema,
       },
       (args) => this.handleSimulateInput(args)
+    );
+
+    this.server.registerTool(
+      'inspect_node',
+      {
+        description: 'Read one node of the game started by run_project or run_scene with the harness on. path is a node path relative to the current scene, an absolute path that starts with /root, or a bare node name, which finds the first match in the tree and prefers a visible one. Returns the node\'s path, class and visibility, its rect and center for a Control, its position for a Node2D, its text when it has one, and the props you name. Positions are in the game\'s viewport coordinates, so a center is a point that simulate_input can click.',
+        inputSchema: inspectNodeSchema,
+      },
+      (args) => this.handleInspectNode(args)
     );
 
     this.server.registerTool(
@@ -1794,6 +1809,36 @@ class GodotServer {
     const shotText = screenshots > 0 ? ` The ${screenshots} screenshot(s) are in viewport coordinates.` : '';
     content.push({ type: 'text', text: `Ran ${commands.length} command(s).${shotText}` });
     return { content };
+  }
+
+  /**
+   * Handle the inspect_node tool
+   */
+  private async handleInspectNode(args: InspectNodeArgs) {
+    const command: Record<string, unknown> = { type: 'node', path: args.path };
+    if (args.props !== undefined) {
+      command.props = args.props;
+    }
+
+    let response: HarnessResponse;
+    try {
+      response = await this.requestHarness([command], 15000);
+    } catch (error: any) {
+      return this.createErrorResponse(`Failed to inspect the node: ${error?.message || 'Unknown error'}`, [
+        'Start the game with run_project or run_scene first',
+        'Check get_debug_output for "[godot-mcp harness] listening on" to confirm the harness started',
+      ]);
+    }
+
+    const result = response.results?.[0];
+    if (!response.ok || !result) {
+      return {
+        content: [{ type: 'text' as const, text: result?.error ?? response.error ?? 'The harness gave no result' }],
+        isError: true,
+      };
+    }
+    const { type: _type, ...info } = result;
+    return { content: [{ type: 'text' as const, text: JSON.stringify(info) }] };
   }
 
   /**

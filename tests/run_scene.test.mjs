@@ -141,6 +141,60 @@ test('run_scene integrates with process and debug tools', {
   }
 });
 
+test('inspect_node reads nodes of the running scene', {
+  skip: skipReason,
+  timeout: 60000,
+}, async () => {
+  const { client, transport } = connectClient();
+  const inspectNode = (args) => client.callTool({ name: 'inspect_node', arguments: args });
+
+  try {
+    await client.connect(transport);
+    await client.callTool({
+      name: 'run_scene',
+      arguments: { projectPath: fixturePath, scenePath: 'res://tests/smoke_test.tscn' },
+    });
+    await waitForDebugOutput(client, 'RUN_SCENE_TEST_OK');
+
+    const label = await inspectNode({ path: 'VisibleLabel', props: ['name'] });
+    assert.notEqual(label.isError, true, getText(label));
+    const labelInfo = JSON.parse(getText(label));
+    assert.equal(labelInfo.path, '/root/SmokeTest/VisibleLabel');
+    assert.equal(labelInfo.class, 'Label');
+    assert.equal(labelInfo.visible, true);
+    assert.deepEqual(labelInfo.rect, [10, 20, 100, 30]);
+    assert.deepEqual(labelInfo.center, [60, 35]);
+    assert.equal(labelInfo.text, 'Hello');
+    assert.match(labelInfo.props.name, /VisibleLabel/);
+
+    const marker = JSON.parse(getText(await inspectNode({ path: '/root/SmokeTest/Marker' })));
+    assert.equal(marker.class, 'Node2D');
+    assert.deepEqual(marker.position, [40, 50]);
+    assert.equal('rect' in marker, false);
+    assert.equal('props' in marker, false);
+
+    // The scene has a CloseButton in a hidden panel first and one in a shown
+    // panel second, so a bare name has to skip the hidden one.
+    const closeButton = JSON.parse(getText(await inspectNode({ path: 'CloseButton' })));
+    assert.equal(closeButton.path, '/root/SmokeTest/ShownPanel/CloseButton');
+    assert.equal(closeButton.visible, true);
+
+    const hiddenButton = JSON.parse(getText(await inspectNode({ path: 'HiddenPanel/CloseButton' })));
+    assert.equal(hiddenButton.visible, false);
+
+    const missing = await inspectNode({ path: 'NoSuchNode' });
+    assert.equal(missing.isError, true);
+    assert.match(getText(missing), /no node NoSuchNode in the scene res:\/\/tests\/smoke_test\.tscn/);
+  } finally {
+    try {
+      await client.callTool({ name: 'stop_project', arguments: {} });
+    } catch {
+      // The process may already be stopped or the transport may already be closed.
+    }
+    await client.close();
+  }
+});
+
 test('run_scene with embedded runs a game with no window', {
   skip: skipReason || (process.platform !== 'darwin' ? 'embedded only works on macOS' : false),
   timeout: 60000,

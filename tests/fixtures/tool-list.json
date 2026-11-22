@@ -228,6 +228,29 @@
     }
   },
   {
+    "name": "inspect_node",
+    "description": "Read one node of the game started by run_project or run_scene with the harness on. path is a node path relative to the current scene, an absolute path that starts with /root, or a bare node name, which finds the first match in the tree and prefers a visible one. Returns the node's path, class and visibility, its rect and center for a Control, its position for a Node2D, its text when it has one, and the props you name. Positions are in the game's viewport coordinates, so a center is a point that simulate_input can click.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Node path relative to the current scene, an absolute path that starts with /root, or a bare node name"
+        },
+        "props": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional: Property names to read, returned as var_to_str text under props, e.g. [\"name\", \"modulate\"]"
+        }
+      },
+      "required": [
+        "path"
+      ]
+    }
+  },
+  {
     "name": "get_debug_output",
     "description": "Get the output, errors and status of the last run_project or run_scene process. Works while it runs and after it exits, crashes or times out, until the next run or stop_project. Keeps the last 1000 lines of each stream.",
     "inputSchema": {
