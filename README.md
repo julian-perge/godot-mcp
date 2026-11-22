@@ -196,7 +196,7 @@ The real mouse cursor stays put unless you pass `warpMouse: true`. Clicks, drags
 | `text` | the node has a `text` property | The text |
 | `props` | `props` was given | Each name with its value as `var_to_str()` text |
 
-Rects and positions are in the game's viewport coordinates, the same ones `click` and `capture_screenshot` use, so a `center` is a point that `simulate_input` can click. They include any Camera2D and CanvasLayer transform.
+Rects and positions are in the game's viewport coordinates, the same ones `click` and `capture_screenshot` use, so a `center` is a point that `simulate_input` can click. They include any Camera2D and CanvasLayer transform. For a node inside a SubViewport they are in that SubViewport's own coordinates, so they match `click` only when the SubViewport fills the window at its own size.
 
 `inspect_tree` answers with the scene file, the current scene's path and the nodes in tree order. Each entry has the keys above except `props`, plus `depth`, its level below the start node. A CanvasItem that is not visible is left out with its children, unless `includeHidden` is true.
 
