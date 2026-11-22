@@ -38,7 +38,7 @@
         },
         "harness": {
           "type": "boolean",
-          "description": "Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type."
+          "description": "Optional: Run the game under the godot-mcp harness main loop so capture_screenshot, simulate_input, inspect_node and inspect_tree work (default: true). Nothing is written to the project. Set false for a project with its own main loop type."
         },
         "embedded": {
           "type": "boolean",
@@ -79,7 +79,7 @@
         },
         "harness": {
           "type": "boolean",
-          "description": "Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type."
+          "description": "Optional: Run the game under the godot-mcp harness main loop so capture_screenshot, simulate_input, inspect_node and inspect_tree work (default: true). Nothing is written to the project. Set false for a project with its own main loop type."
         },
         "embedded": {
           "type": "boolean",
@@ -235,7 +235,7 @@
       "properties": {
         "path": {
           "type": "string",
-          "description": "Node path relative to the current scene, an absolute path that starts with /root, or a bare node name"
+          "description": "Node path relative to the current scene, an absolute path that starts with /root, or a bare node name, in which * and ? are wildcards"
         },
         "props": {
           "type": "array",

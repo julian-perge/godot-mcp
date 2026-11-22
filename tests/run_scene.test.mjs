@@ -190,6 +190,14 @@ test('inspect_node and inspect_tree read nodes of the running scene', {
     const hiddenButton = await readNode({ path: 'HiddenPanel/CloseButton' });
     assert.equal(hiddenButton.visible, false);
 
+    // The CanvasLayer offset of (30, 40) moves where its children are drawn,
+    // so the answer has to include it to be a point that click can use.
+    const layerLabel = await readNode({ path: 'LayerLabel' });
+    assert.deepEqual(layerLabel.rect, [40, 60, 100, 30]);
+    assert.deepEqual(layerLabel.center, [90, 75]);
+    const layerMarker = await readNode({ path: 'LayerMarker' });
+    assert.deepEqual(layerMarker.position, [35, 45]);
+
     const missing = await inspectNode({ path: 'NoSuchNode' });
     assert.equal(missing.isError, true);
     assert.match(getText(missing), /no node NoSuchNode in the scene res:\/\/tests\/smoke_test\.tscn/);

@@ -166,10 +166,10 @@ The real mouse cursor stays put unless you pass `warpMouse: true`. Clicks, drags
 
 `path` resolves in this order:
 
-1. An empty path is the current scene.
+1. An empty path is the current scene, or the root when there is no current scene.
 2. A path that starts with `/` is an absolute path, such as `/root/Main/Menu`.
 3. Any other path is relative to the current scene, then relative to the root.
-4. A bare name with no `/` that steps 1 to 3 did not find is searched for in the whole tree. The first visible match wins. When no match is visible, the first match wins. A scene can hold several nodes with the same name, such as a close button in each panel, and this step finds the one on screen.
+4. A bare name with no `/` that steps 1 to 3 did not find is searched for in the whole tree. The first visible match wins. When no match is visible, the first match wins. A scene can hold several nodes with the same name, such as a close button in each panel, and this step finds the one on screen. The name can hold the wildcards `*` and `?`, so `Close*` matches `CloseButton`.
 
 ```json
 { "path": "StartButton", "props": ["disabled"] }
@@ -191,12 +191,12 @@ The real mouse cursor stays put unless you pass `warpMouse: true`. Clicks, drags
 | --- | --- | --- |
 | `path`, `class` | always | The node path and the engine class |
 | `visible` | CanvasItem | `is_visible_in_tree()` |
-| `rect`, `center` | Control | `[x, y, w, h]` of `get_global_rect()`, and `[x, y]` of its center |
-| `position` | Node2D | `[x, y]` of `global_position` |
+| `rect`, `center` | Control | `[x, y, w, h]` of the node's rect on screen, and `[x, y]` of its center |
+| `position` | Node2D | `[x, y]` of the node's origin on screen |
 | `text` | the node has a `text` property | The text |
 | `props` | `props` was given | Each name with its value as `var_to_str()` text |
 
-Rects and positions are in the game's viewport coordinates, the same ones `click` and `capture_screenshot` use, so a `center` is a point that `simulate_input` can click.
+Rects and positions are in the game's viewport coordinates, the same ones `click` and `capture_screenshot` use, so a `center` is a point that `simulate_input` can click. They include any Camera2D and CanvasLayer transform.
 
 `inspect_tree` answers with the scene file, the current scene's path and the nodes in tree order. Each entry has the keys above except `props`, plus `depth`, its level below the start node. A CanvasItem that is not visible is left out with its children, unless `includeHidden` is true.
 

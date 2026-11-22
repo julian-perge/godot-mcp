@@ -23,10 +23,10 @@ Both commands read the scene tree and change nothing. They go through `_run_comm
 
 `path` resolves in this order. The `node` and `tree` commands both use it.
 
-1. An empty or missing `path` is the current scene.
+1. An empty or missing `path` is the current scene, or the root when there is no current scene.
 2. A `path` that starts with `/` is an absolute path from the root.
 3. Otherwise the path is relative to the current scene, then relative to the root.
-4. A bare name with no `/` that steps 1 to 3 did not find is looked up with `root.find_children(name, "", true, false)`. The first match that is visible in the tree wins. When no match is visible, the first match wins.
+4. A bare name with no `/` that steps 1 to 3 did not find is looked up with `root.find_children(name, "", true, false)`. The first match that is visible in the tree wins. When no match is visible, the first match wins. `find_children` reads `*` and `?` in the name as wildcards.
 
 Step 4 prefers a visible match because a scene can hold several nodes with the same name, such as a close button in each of several panels, and only one of them is on screen. urchin's main menu has this case, with two `CloseButton` nodes.
 
@@ -41,13 +41,13 @@ Result:
 | `path` | always | `str(node.get_path())` |
 | `class` | always | `node.get_class()` |
 | `visible` | CanvasItem | `is_visible_in_tree()` |
-| `rect` | Control | `[x, y, w, h]` of `get_global_rect()` |
+| `rect` | Control | `[x, y, w, h]` of the rect `Rect2(Vector2.ZERO, size)` through `get_global_transform_with_canvas()` |
 | `center` | Control | `[x, y]` of the rect's center |
-| `position` | Node2D | `[x, y]` of `global_position` |
+| `position` | Node2D | `[x, y]` of `get_global_transform_with_canvas().origin` |
 | `text` | node has a `text` property | `str(text)` |
 | `props` | `props` was given | a dictionary of each name to `var_to_str(node.get(name))` |
 
-Rects and positions are in the same viewport coordinates as `click` and `screenshot`.
+Rects and positions are in the same viewport coordinates as `click` and `screenshot`. The canvas transform holds any Camera2D and CanvasLayer offset, so plain `get_global_rect()` and `global_position` would miss for a node under a camera or a layer.
 
 Errors:
 

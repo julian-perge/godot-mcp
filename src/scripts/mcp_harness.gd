@@ -470,14 +470,14 @@ func _walk(node: Node, level: int, depth: int, include_hidden: bool, nodes: Arra
 		_walk(child, level + 1, depth, include_hidden, nodes)
 
 
-# An empty path is the current scene, a path that starts with / is from the
+# An empty path is the current scene, or the root when there is none, a path that starts with / is from the
 # root, and any other path is tried from the current scene, then from the root.
 # A bare name that none of these finds is searched for in the whole tree, and a
 # visible match wins, because a scene can hold several nodes with the same name,
 # such as a close button in each panel, while only one of them is on screen.
 func _find_node(path: String) -> Node:
 	if path.is_empty():
-		return current_scene
+		return current_scene if current_scene != null else root
 	if path.begins_with("/"):
 		return root.get_node_or_null(path)
 	var node: Node = null
@@ -500,20 +500,21 @@ func _no_node_error(path: String) -> String:
 	return "no node %s in the scene %s" % [path, current_scene.scene_file_path]
 
 
-# Rects and positions are global canvas coordinates. They are the viewport
-# coordinates that click and screenshot use only when no Camera2D and no
-# CanvasLayer transform moves the node's canvas.
+# Rects and positions go through the canvas transform, which holds any Camera2D
+# and CanvasLayer offset, so they are the viewport coordinates that click and
+# screenshot use.
 func _describe(node: Node) -> Dictionary:
 	var info := {"path": str(node.get_path()), "class": node.get_class()}
 	if node is CanvasItem:
 		info["visible"] = (node as CanvasItem).is_visible_in_tree()
 	if node is Control:
-		var rect := (node as Control).get_global_rect()
+		var control := node as Control
+		var rect := control.get_global_transform_with_canvas() * Rect2(Vector2.ZERO, control.size)
 		var center := rect.get_center()
 		info["rect"] = [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
 		info["center"] = [center.x, center.y]
 	elif node is Node2D:
-		var position := (node as Node2D).global_position
+		var position := (node as Node2D).get_global_transform_with_canvas().origin
 		info["position"] = [position.x, position.y]
 	if "text" in node:
 		info["text"] = str(node.get("text"))

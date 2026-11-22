@@ -121,7 +121,7 @@ const runProjectSchema = z.object({
   projectPath: z.string().describe('Path to the Godot project directory'),
   scene: z.string().optional().describe('Optional: Specific scene to run'),
   args: z.array(z.string()).optional().describe('Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.'),
-  harness: z.boolean().optional().describe('Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.'),
+  harness: z.boolean().optional().describe('Optional: Run the game under the godot-mcp harness main loop so capture_screenshot, simulate_input, inspect_node and inspect_tree work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.'),
   embedded: z.boolean().optional().describe('Optional: macOS only (default: false). Run the game with no window, through Godot\'s undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness.'),
 });
 type RunProjectArgs = z.infer<typeof runProjectSchema>;
@@ -131,7 +131,7 @@ const runSceneSchema = z.object({
   scenePath: z.string().describe('Scene to run, as a res:// path or a path relative to the project'),
   timeoutMs: z.number().int().min(1).max(MAX_SCENE_TIMEOUT_MS).optional().describe('Time in milliseconds before the scene is stopped automatically (default: 30000)'),
   args: z.array(z.string()).optional().describe('Optional: Arguments for the game, e.g. ["--battle=1009"]. They are passed after "--", so the game reads them with OS.get_cmdline_user_args() and they cannot change engine options.'),
-  harness: z.boolean().optional().describe('Optional: Run the game under the godot-mcp harness main loop so capture_screenshot and simulate_input work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.'),
+  harness: z.boolean().optional().describe('Optional: Run the game under the godot-mcp harness main loop so capture_screenshot, simulate_input, inspect_node and inspect_tree work (default: true). Nothing is written to the project. Set false for a project with its own main loop type.'),
   embedded: z.boolean().optional().describe('Optional: macOS only (default: false). Run the game with no window, through Godot\'s undocumented --embedded editor mode. It never takes focus, get_global_mouse_position() follows simulate_input so warpMouse is not needed, and capture_screenshot works with nothing on screen. Needs the harness.'),
 });
 type RunSceneArgs = z.infer<typeof runSceneSchema>;
@@ -166,7 +166,7 @@ const simulateInputSchema = z.object({
 type SimulateInputArgs = z.infer<typeof simulateInputSchema>;
 
 const inspectNodeSchema = z.object({
-  path: z.string().describe('Node path relative to the current scene, an absolute path that starts with /root, or a bare node name'),
+  path: z.string().describe('Node path relative to the current scene, an absolute path that starts with /root, or a bare node name, in which * and ? are wildcards'),
   props: z.array(z.string()).optional().describe('Optional: Property names to read, returned as var_to_str text under props, e.g. ["name", "modulate"]'),
 });
 type InspectNodeArgs = z.infer<typeof inspectNodeSchema>;

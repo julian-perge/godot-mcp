@@ -41,3 +41,16 @@ offset_bottom = 160.0
 offset_right = 60.0
 offset_bottom = 40.0
 text = "Close"
+
+[node name="Layer" type="CanvasLayer" parent="."]
+offset = Vector2(30, 40)
+
+[node name="LayerLabel" type="Label" parent="Layer"]
+offset_left = 10.0
+offset_top = 20.0
+offset_right = 110.0
+offset_bottom = 50.0
+text = "Layer"
+
+[node name="LayerMarker" type="Node2D" parent="Layer"]
+position = Vector2(5, 5)
