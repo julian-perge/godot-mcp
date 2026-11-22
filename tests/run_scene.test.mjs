@@ -147,6 +147,11 @@ test('inspect_node and inspect_tree read nodes of the running scene', {
 }, async () => {
   const { client, transport } = connectClient();
   const inspectNode = (args) => client.callTool({ name: 'inspect_node', arguments: args });
+  const readNode = async (args) => {
+    const result = await inspectNode(args);
+    assert.notEqual(result.isError, true, getText(result));
+    return JSON.parse(getText(result));
+  };
   const inspectTree = async (args) => {
     const result = await client.callTool({ name: 'inspect_tree', arguments: args });
     assert.notEqual(result.isError, true, getText(result));
@@ -161,18 +166,16 @@ test('inspect_node and inspect_tree read nodes of the running scene', {
     });
     await waitForDebugOutput(client, 'RUN_SCENE_TEST_OK');
 
-    const label = await inspectNode({ path: 'VisibleLabel', props: ['name'] });
-    assert.notEqual(label.isError, true, getText(label));
-    const labelInfo = JSON.parse(getText(label));
+    const labelInfo = await readNode({ path: 'VisibleLabel', props: ['name'] });
     assert.equal(labelInfo.path, '/root/SmokeTest/VisibleLabel');
     assert.equal(labelInfo.class, 'Label');
     assert.equal(labelInfo.visible, true);
     assert.deepEqual(labelInfo.rect, [10, 20, 100, 30]);
     assert.deepEqual(labelInfo.center, [60, 35]);
     assert.equal(labelInfo.text, 'Hello');
-    assert.match(labelInfo.props.name, /VisibleLabel/);
+    assert.equal(labelInfo.props.name, '&"VisibleLabel"');
 
-    const marker = JSON.parse(getText(await inspectNode({ path: '/root/SmokeTest/Marker' })));
+    const marker = await readNode({ path: '/root/SmokeTest/Marker' });
     assert.equal(marker.class, 'Node2D');
     assert.deepEqual(marker.position, [40, 50]);
     assert.equal('rect' in marker, false);
@@ -180,11 +183,11 @@ test('inspect_node and inspect_tree read nodes of the running scene', {
 
     // The scene has a CloseButton in a hidden panel first and one in a shown
     // panel second, so a bare name has to skip the hidden one.
-    const closeButton = JSON.parse(getText(await inspectNode({ path: 'CloseButton' })));
+    const closeButton = await readNode({ path: 'CloseButton' });
     assert.equal(closeButton.path, '/root/SmokeTest/ShownPanel/CloseButton');
     assert.equal(closeButton.visible, true);
 
-    const hiddenButton = JSON.parse(getText(await inspectNode({ path: 'HiddenPanel/CloseButton' })));
+    const hiddenButton = await readNode({ path: 'HiddenPanel/CloseButton' });
     assert.equal(hiddenButton.visible, false);
 
     const missing = await inspectNode({ path: 'NoSuchNode' });

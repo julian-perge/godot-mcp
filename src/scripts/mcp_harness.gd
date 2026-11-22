@@ -3,7 +3,7 @@ extends SceneTree
 ## passes this script to Godot with -s, so it runs as the game's main loop and
 ## nothing is installed into the project. The project's autoloads and scene load
 ## as usual, and the harness adds a TCP endpoint on 127.0.0.1 that
-## capture_screenshot and simulate_input talk to.
+## capture_screenshot, simulate_input, inspect_node and inspect_tree talk to.
 ##
 ## Besides input and screenshots, the node command reads one node of the scene
 ## tree: its path, class and visibility, its rect for a Control, its position
@@ -500,8 +500,9 @@ func _no_node_error(path: String) -> String:
 	return "no node %s in the scene %s" % [path, current_scene.scene_file_path]
 
 
-# Rects and positions are global canvas coordinates, which are the viewport
-# coordinates that click and screenshot use.
+# Rects and positions are global canvas coordinates. They are the viewport
+# coordinates that click and screenshot use only when no Camera2D and no
+# CanvasLayer transform moves the node's canvas.
 func _describe(node: Node) -> Dictionary:
 	var info := {"path": str(node.get_path()), "class": node.get_class()}
 	if node is CanvasItem:
