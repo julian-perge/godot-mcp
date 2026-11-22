@@ -60,7 +60,7 @@ test('tools/list keeps the names, descriptions and input schemas in the fixture'
   try {
     await client.connect(transport);
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 21);
+    assert.equal(tools.length, 22);
     assert.deepEqual(normalizeTools(tools), normalizeTools(expected));
   } finally {
     await client.close();

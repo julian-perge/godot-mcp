@@ -171,6 +171,13 @@ const inspectNodeSchema = z.object({
 });
 type InspectNodeArgs = z.infer<typeof inspectNodeSchema>;
 
+const inspectTreeSchema = z.object({
+  path: z.string().optional().describe('Optional: Node to start from, as in inspect_node (default: the current scene)'),
+  depth: z.number().int().min(0).max(20).optional().describe('Optional: How many levels below the start node to list (default: 3)'),
+  includeHidden: z.boolean().optional().describe('Optional: Also list hidden CanvasItems and their children (default: false)'),
+});
+type InspectTreeArgs = z.infer<typeof inspectTreeSchema>;
+
 const runGutTestsSchema = z.object({
   projectPath: z.string().describe('Path to the Godot project directory'),
   test: z.array(z.string()).optional().describe('Optional: res:// test scripts to run, e.g. ["res://test/unit/test_battle.gd"]. The .gutconfig.json dirs are skipped unless dir is also given.'),
@@ -861,6 +868,15 @@ class GodotServer {
         inputSchema: inspectNodeSchema,
       },
       (args) => this.handleInspectNode(args)
+    );
+
+    this.server.registerTool(
+      'inspect_tree',
+      {
+        description: 'List the nodes under one node of the game started by run_project or run_scene with the harness on. path works as in inspect_node and defaults to the current scene. A CanvasItem that is not visible is left out with its children, unless includeHidden is true. Each entry has the keys of inspect_node except props, plus its depth below the start node. Positions are in the game\'s viewport coordinates.',
+        inputSchema: inspectTreeSchema,
+      },
+      (args) => this.handleInspectTree(args)
     );
 
     this.server.registerTool(
@@ -1819,12 +1835,35 @@ class GodotServer {
     if (args.props !== undefined) {
       command.props = args.props;
     }
+    return this.runInspectCommand(command);
+  }
 
+  /**
+   * Handle the inspect_tree tool
+   */
+  private async handleInspectTree(args: InspectTreeArgs) {
+    const command: Record<string, unknown> = { type: 'tree' };
+    if (args.path !== undefined) {
+      command.path = args.path;
+    }
+    if (args.depth !== undefined) {
+      command.depth = args.depth;
+    }
+    if (args.includeHidden !== undefined) {
+      command.include_hidden = args.includeHidden;
+    }
+    return this.runInspectCommand(command);
+  }
+
+  /**
+   * Send one node or tree command and answer with its result as JSON
+   */
+  private async runInspectCommand(command: Record<string, unknown>) {
     let response: HarnessResponse;
     try {
       response = await this.requestHarness([command], 15000);
     } catch (error: any) {
-      return this.createErrorResponse(`Failed to inspect the node: ${error?.message || 'Unknown error'}`, [
+      return this.createErrorResponse(`Failed to inspect the game: ${error?.message || 'Unknown error'}`, [
         'Start the game with run_project or run_scene first',
         'Check get_debug_output for "[godot-mcp harness] listening on" to confirm the harness started',
       ]);

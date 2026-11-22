@@ -141,12 +141,17 @@ test('run_scene integrates with process and debug tools', {
   }
 });
 
-test('inspect_node reads nodes of the running scene', {
+test('inspect_node and inspect_tree read nodes of the running scene', {
   skip: skipReason,
   timeout: 60000,
 }, async () => {
   const { client, transport } = connectClient();
   const inspectNode = (args) => client.callTool({ name: 'inspect_node', arguments: args });
+  const inspectTree = async (args) => {
+    const result = await client.callTool({ name: 'inspect_tree', arguments: args });
+    assert.notEqual(result.isError, true, getText(result));
+    return JSON.parse(getText(result));
+  };
 
   try {
     await client.connect(transport);
@@ -185,6 +190,34 @@ test('inspect_node reads nodes of the running scene', {
     const missing = await inspectNode({ path: 'NoSuchNode' });
     assert.equal(missing.isError, true);
     assert.match(getText(missing), /no node NoSuchNode in the scene res:\/\/tests\/smoke_test\.tscn/);
+
+    const tree = await inspectTree({});
+    assert.equal(tree.scene, 'res://tests/smoke_test.tscn');
+    assert.equal(tree.root, '/root/SmokeTest');
+    assert.deepEqual(tree.nodes[0], { path: '/root/SmokeTest', class: 'Node', depth: 0 });
+    const treeLabel = tree.nodes.find((node) => node.path === '/root/SmokeTest/VisibleLabel');
+    const { props: _labelProps, ...labelKeys } = labelInfo;
+    assert.deepEqual(treeLabel, { ...labelKeys, depth: 1 });
+    const treePaths = tree.nodes.map((node) => node.path);
+    assert.equal(treePaths.includes('/root/SmokeTest/HiddenPanel'), false);
+    assert.equal(treePaths.includes('/root/SmokeTest/HiddenPanel/HiddenLabel'), false);
+
+    const fullTree = await inspectTree({ includeHidden: true });
+    const fullPaths = fullTree.nodes.map((node) => node.path);
+    assert.ok(fullPaths.includes('/root/SmokeTest/HiddenPanel'));
+    assert.ok(fullPaths.includes('/root/SmokeTest/HiddenPanel/HiddenLabel'));
+
+    const panel = await inspectTree({ path: 'ShownPanel', depth: 0 });
+    assert.deepEqual(panel.nodes.map((node) => node.path), ['/root/SmokeTest/ShownPanel']);
+    const panelChildren = await inspectTree({ path: 'ShownPanel' });
+    assert.deepEqual(panelChildren.nodes.map((node) => [node.path, node.depth]), [
+      ['/root/SmokeTest/ShownPanel', 0],
+      ['/root/SmokeTest/ShownPanel/CloseButton', 1],
+    ]);
+
+    const missingTree = await client.callTool({ name: 'inspect_tree', arguments: { path: 'NoSuchNode' } });
+    assert.equal(missingTree.isError, true);
+    assert.match(getText(missingTree), /no node NoSuchNode in the scene/);
   } finally {
     try {
       await client.callTool({ name: 'stop_project', arguments: {} });

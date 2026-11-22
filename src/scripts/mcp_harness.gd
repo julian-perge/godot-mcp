@@ -7,7 +7,8 @@ extends SceneTree
 ##
 ## Besides input and screenshots, the node command reads one node of the scene
 ## tree: its path, class and visibility, its rect for a Control, its position
-## for a Node2D, its text and the properties the request names. It changes nothing.
+## for a Node2D, its text and the properties the request names. The tree command
+## lists the same facts for each node under one node. Neither changes the tree.
 ##
 ## The endpoint only opens in a debug build and only when the server set
 ## GODOT_MCP_HARNESS_PORT and GODOT_MCP_HARNESS_TOKEN. Each request is one line
@@ -204,6 +205,8 @@ func _run_command(client: Client, command: Dictionary, warp: bool) -> Dictionary
 			return await _wait(command)
 		"node":
 			return _node(command)
+		"tree":
+			return _tree(command)
 		var other:
 			return {"error": "unknown command type: %s" % other}
 
@@ -425,6 +428,38 @@ func _node(command: Dictionary) -> Dictionary:
 			values[prop] = var_to_str(node.get(prop))
 		info["props"] = values
 	return info
+
+
+func _tree(command: Dictionary) -> Dictionary:
+	var depth = command.get("depth", 3)
+	if not _is_number(depth) or depth < 0 or depth != floor(depth):
+		return {"error": "depth must be a whole number, 0 or more"}
+	var include_hidden = command.get("include_hidden", false)
+	if typeof(include_hidden) != TYPE_BOOL:
+		return {"error": "include_hidden must be true or false"}
+	var path := str(command.get("path", ""))
+	var start := _find_node(path)
+	if start == null:
+		return {"error": _no_node_error(path)}
+	var nodes := []
+	_walk(start, 0, int(depth), include_hidden, nodes)
+	return {
+		"scene": current_scene.scene_file_path if current_scene != null else "",
+		"root": str(current_scene.get_path()) if current_scene != null else "/root",
+		"nodes": nodes,
+	}
+
+
+func _walk(node: Node, level: int, depth: int, include_hidden: bool, nodes: Array) -> void:
+	if node is CanvasItem and not include_hidden and not (node as CanvasItem).is_visible_in_tree():
+		return
+	var entry := _describe(node)
+	entry["depth"] = level
+	nodes.append(entry)
+	if level >= depth:
+		return
+	for child in node.get_children():
+		_walk(child, level + 1, depth, include_hidden, nodes)
 
 
 # An empty path is the current scene, a path that starts with / is from the

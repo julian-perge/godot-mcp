@@ -251,6 +251,30 @@
     }
   },
   {
+    "name": "inspect_tree",
+    "description": "List the nodes under one node of the game started by run_project or run_scene with the harness on. path works as in inspect_node and defaults to the current scene. A CanvasItem that is not visible is left out with its children, unless includeHidden is true. Each entry has the keys of inspect_node except props, plus its depth below the start node. Positions are in the game's viewport coordinates.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Optional: Node to start from, as in inspect_node (default: the current scene)"
+        },
+        "depth": {
+          "type": "integer",
+          "description": "Optional: How many levels below the start node to list (default: 3)",
+          "minimum": 0,
+          "maximum": 20
+        },
+        "includeHidden": {
+          "type": "boolean",
+          "description": "Optional: Also list hidden CanvasItems and their children (default: false)"
+        }
+      },
+      "required": []
+    }
+  },
+  {
     "name": "get_debug_output",
     "description": "Get the output, errors and status of the last run_project or run_scene process. Works while it runs and after it exits, crashes or times out, until the next run or stop_project. Keeps the last 1000 lines of each stream.",
     "inputSchema": {
