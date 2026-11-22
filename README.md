@@ -217,7 +217,7 @@ A node that is not found gives an error result such as `no node StartButton in t
 
 The tools reach only the game that the server started. A script that starts the game itself can send the same `node` and `tree` commands to the harness over TCP:
 
-1. Start a debug build of Godot with `-s /path/to/godot-mcp/build/scripts/mcp_harness.gd`, and set `GODOT_MCP_HARNESS_PORT` to a free port and `GODOT_MCP_HARNESS_TOKEN` to a random string. Set `GODOT_MCP_HARNESS_TITLE` too to give the window a title of its own.
+1. Start a debug build of Godot with `-s /path/to/godot-mcp/src/scripts/mcp_harness.gd`, and set `GODOT_MCP_HARNESS_PORT` to a free port and `GODOT_MCP_HARNESS_TOKEN` to a random string. Set `GODOT_MCP_HARNESS_TITLE` too to give the window a title of its own. Use the `src/` copy: it is tracked, so a clone or a git submodule has it before any build, and `bun run build` copies it to `build/scripts/` unchanged.
 2. Wait for `[godot-mcp harness] listening on 127.0.0.1:<port>` in the game's output.
 3. Connect to `127.0.0.1:<port>`, send one line of JSON, and read one line of JSON back. The harness closes the connection after each answer.
 
