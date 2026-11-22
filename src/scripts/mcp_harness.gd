@@ -10,6 +10,9 @@ extends SceneTree
 ## for a Node2D, its text and the properties the request names. The tree command
 ## lists the same facts for each node under one node. Neither changes the tree.
 ##
+## When GODOT_MCP_HARNESS_TITLE is set and not empty, the harness gives the
+## window that title, in any build, so a launcher can mark the windows it starts.
+##
 ## The endpoint only opens in a debug build and only when the server set
 ## GODOT_MCP_HARNESS_PORT and GODOT_MCP_HARNESS_TOKEN. Each request is one line
 ## of JSON carrying that token, and the answer is one line of JSON. The harness
@@ -71,6 +74,11 @@ func _initialize() -> void:
 		var main_scene := str(ProjectSettings.get_setting("application/run/main_scene", ""))
 		if not main_scene.is_empty():
 			change_scene_to_file(main_scene)
+	# root.title sets the same window title as DisplayServer.window_set_title,
+	# and inspect_node can read it back.
+	var title := OS.get_environment("GODOT_MCP_HARNESS_TITLE")
+	if not title.is_empty():
+		root.title = title
 	if not OS.is_debug_build():
 		return
 	var port := OS.get_environment("GODOT_MCP_HARNESS_PORT").to_int()

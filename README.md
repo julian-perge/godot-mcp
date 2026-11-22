@@ -315,6 +315,7 @@ For any MCP-compatible client, use this configuration:
 |----------|-------------|
 | `GODOT_PATH` | Path to the Godot executable (overrides automatic detection) |
 | `DEBUG` | Set to `"true"` to enable detailed server-side debug logging |
+| `GODOT_MCP_HARNESS_TITLE` | The window title of a game that runs under the harness. The harness reads it, and the server passes its own environment to the game, so it works for `run_project`, `run_scene` and a launcher of its own. When it is unset or empty, the title stays the project's own |
 
 <details>
 <summary><strong>Building from Source</strong></summary>

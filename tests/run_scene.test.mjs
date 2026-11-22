@@ -20,11 +20,11 @@ function getText(result) {
   return textContent.text;
 }
 
-function connectClient() {
+function connectClient(env = {}) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [path.join(repositoryPath, 'build', 'index.js')],
-    env: { ...process.env, GODOT_PATH: godotPath },
+    env: { ...process.env, GODOT_PATH: godotPath, ...env },
   });
   const client = new Client(
     { name: 'run-scene-integration-test', version: '1.0.0' },
@@ -226,6 +226,37 @@ test('inspect_node and inspect_tree read nodes of the running scene', {
     }
     await client.close();
   }
+});
+
+test('GODOT_MCP_HARNESS_TITLE sets the window title of the running game', {
+  skip: skipReason,
+  timeout: 60000,
+}, async () => {
+  const readTitle = async (env) => {
+    const { client, transport } = connectClient(env);
+    try {
+      await client.connect(transport);
+      await client.callTool({
+        name: 'run_scene',
+        arguments: { projectPath: fixturePath, scenePath: 'res://tests/smoke_test.tscn' },
+      });
+      await waitForDebugOutput(client, 'RUN_SCENE_TEST_OK');
+      const result = await client.callTool({ name: 'inspect_node', arguments: { path: '/root', props: ['title'] } });
+      assert.notEqual(result.isError, true, getText(result));
+      return JSON.parse(getText(result)).props.title;
+    } finally {
+      try {
+        await client.callTool({ name: 'stop_project', arguments: {} });
+      } catch {
+        // The process may already be stopped or the transport may already be closed.
+      }
+      await client.close();
+    }
+  };
+
+  assert.equal(await readTitle({ GODOT_MCP_HARNESS_TITLE: 'AGENT VERIFY - test' }), '"AGENT VERIFY - test"');
+  // An empty variable counts as unset, so the title stays the project's name.
+  assert.equal(await readTitle({ GODOT_MCP_HARNESS_TITLE: '' }), '"Run Scene MCP Test"');
 });
 
 test('run_scene with embedded runs a game with no window', {
